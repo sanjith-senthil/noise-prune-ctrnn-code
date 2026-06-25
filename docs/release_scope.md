@@ -22,3 +22,12 @@ Excluded legacy work:
 
 The full internal work history remains available from the archived pre-cleanup
 repository tag. This public release is intentionally smaller and paper-facing.
+
+## Naming and Configuration Notes
+
+- The matched-diagonal flag recorded in some released rescale configurations is
+  nullified by the no-self-connection constraint and is inactive in all reported
+  runs.
+- Some legacy code paths and configuration names label linearized noise-prune as
+  `V-NP`. In this release, `V-NP` is identical to `L-NP` as defined in the
+  manuscript.
