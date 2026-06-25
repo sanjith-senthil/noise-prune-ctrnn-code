@@ -1,0 +1,31 @@
+
+# macOS / Python build noise
+.DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# local environments
+.venv/
+.venv-*/
+requirements.runpod.txt
+
+# local scratch copies
+gym_local_copy/
+matplotlib_local_copy/
+pydantic_stub/
+pydantic_settings_stub/
+runs/
+checkpoints_ctxdm2_fresh/
+
+# experiment outputs
+results/
+*.csv
+
+# large artifacts
+checkpoints/
+results/
+plots/
+archives/

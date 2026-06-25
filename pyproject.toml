@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modcog-ctrnn-pruning"
+version = "0.1.0"
+description = "CTRNN pruning benchmark code for Mod-Cog task-preservation experiments"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.21",
+    "gymnasium>=0.28",
+    "pandas>=1.3",
+    "scipy>=1.8",
+    "matplotlib>=3.5",
+]
+
+[tool.setuptools.packages.find]
+include = ["pruning_benchmark*", "neurogym*", "Mod_Cog*"]

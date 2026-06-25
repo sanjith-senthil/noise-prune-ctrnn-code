@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+python3 scripts/generate_tanh_h512_modcog_revised8_lnp_snp_capped_rescale_missing_quantiles_pruneseeds1_2_suite.py --validate-inputs
+MPLCONFIGDIR=/tmp/mpl python3 -m pruning_benchmark --mode suite \
+  --config configs/task_preservation_tanh_h512_modcog_revised8_12k_seqbest_lnp_snp_capped_rescale_missing_q10_q20_q30_q40_q60_q70_q80_q90_pruneseeds1_2_full8_p50_80.json
+python3 scripts/summarize_tanh_h512_modcog_revised8_lnp_snp_cap_percentile_curve_3seed.py
