@@ -17,3 +17,17 @@ python3 scripts/assess_modcog_laststep.py --tasks all --max_tasks 1
 ```
 
 The computed `T` values are recorded in run metadata via `task_meta`.
+
+## Target Masking and Loss Averaging
+
+Mod-Cog labels use class `0` for fixation. The training and evaluation
+pipeline remaps fixation labels from `0` to `-1`, so the network is neither
+trained nor scored on fixation periods. Cross-entropy loss uses
+`ignore_index=-1`.
+
+When sequence labels are used, logits and targets are flattened over the full
+`(timestep, batch element)` grid before loss and sequence-accuracy computation.
+The loss is therefore averaged over each remaining valid prediction entry
+individually. This gives every scored prediction equal weight; averaging first
+within each timestep would overweight timesteps that contain only a few valid
+entries after fixation masking.
