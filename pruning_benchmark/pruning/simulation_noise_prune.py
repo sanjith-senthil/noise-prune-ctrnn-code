@@ -310,15 +310,27 @@ def _resolve_noise_scale(
     *,
     sigma: Optional[float],
     sigma_source: str,
+    sigma_factor: float = 1.0,
 ) -> float:
+    """Resolve the injected-noise scale.
+
+    ``sigma_factor`` multiplies the network-calibrated scale, so a suite can
+    sweep noise relative to each network's own natural variability rather than
+    at a shared absolute value.  It is ignored when an absolute ``sigma`` is
+    supplied.  The factor must be strictly positive: the probability formula
+    divides by ``sigma**2``, so sigma = 0 is undefined.  Use a small factor
+    (e.g. 1e-3) to approximate the noise-free limit.
+    """
+    if sigma_factor <= 0.0:
+        raise ValueError("sigma_factor must be positive; use a small value to approach zero noise.")
     if sigma is not None:
         if sigma <= 0.0:
             raise ValueError("sigma must be positive when provided explicitly.")
         return float(sigma)
     if sigma_source == "natural_voltage":
-        return float(natural["sigma_natural_v"])
+        return float(natural["sigma_natural_v"]) * float(sigma_factor)
     if sigma_source == "natural_rate":
-        return float(natural["sigma_natural_rate"])
+        return float(natural["sigma_natural_rate"]) * float(sigma_factor)
     raise ValueError(f"Unsupported sigma_source '{sigma_source}'.")
 
 
@@ -471,6 +483,7 @@ def simulation_noise_prune_mask(
     batches: Sequence[Batch],
     sigma: Optional[float] = None,
     sigma_source: str = "natural_voltage",
+    sigma_factor: float = 1.0,
     eps: float = 0.3,
     observable_space: str = "rate",
     inject_space: str = "rate",
@@ -482,7 +495,7 @@ def simulation_noise_prune_mask(
     net = _extract_ctrnn(model)
     batch_arrays = _as_numpy_batches(batches)
     natural = _natural_variability_stats(net, batch_arrays, burn_in_steps=int(burn_in_steps))
-    sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source)
+    sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source, sigma_factor=sigma_factor)
     rng = np.random.default_rng(rng_seed)
     X, sim_stats = _collect_centered_samples(
         net,
@@ -548,6 +561,7 @@ def simulation_noise_prune_recurrent(
     batches: Sequence[Batch],
     sigma: Optional[float] = None,
     sigma_source: str = "natural_voltage",
+    sigma_factor: float = 1.0,
     eps: float = 0.3,
     observable_space: str = "rate",
     inject_space: str = "rate",
@@ -660,6 +674,7 @@ class SimulationNoisePruneStrategy(BasePruner):
             batches=context.batches,
             sigma=kwargs.get("sigma"),
             sigma_source=str(kwargs.get("sigma_source", "natural_voltage")),
+            sigma_factor=float(kwargs.get("sigma_factor", 1.0)),
             eps=float(kwargs.get("eps", 0.3)),
             observable_space=str(kwargs.get("observable_space", "rate")),
             inject_space=str(kwargs.get("inject_space", "rate")),

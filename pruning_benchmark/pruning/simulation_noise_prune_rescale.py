@@ -29,6 +29,7 @@ def simulation_noise_prune_rescale_recurrent(
     batches: Sequence[Tuple[torch.Tensor, torch.Tensor]],
     sigma: float | None = None,
     sigma_source: str = "natural_voltage",
+    sigma_factor: float = 1.0,
     eps: float = 0.3,
     observable_space: str = "rate",
     inject_space: str = "rate",
@@ -55,7 +56,7 @@ def simulation_noise_prune_rescale_recurrent(
     net = _extract_ctrnn(model)
     batch_arrays = _as_numpy_batches(batches)
     natural = _natural_variability_stats(net, batch_arrays, burn_in_steps=int(burn_in_steps))
-    sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source)
+    sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source, sigma_factor=sigma_factor)
     X, sim_stats = _collect_centered_samples(
         net,
         batch_arrays,
@@ -163,6 +164,10 @@ def simulation_noise_prune_rescale_recurrent(
         ),
         "kept_amp_mean": float(np.mean(amp)) if amp.size else 0.0,
         "kept_amp_max": float(np.max(amp)) if amp.size else 0.0,
+        # Bernoulli survivors BEFORE the exact-density top-k, so the top-k's
+        # actual effect can be reported (it pads when this is below target).
+        "kept_edges": int(kept_rows.size),
+        "sigma_factor": float(sigma_factor),
     })
     stats.update(control_stats)
     return stats
@@ -188,6 +193,7 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
             batches=context.batches,
             sigma=kwargs.get("sigma"),
             sigma_source=str(kwargs.get("sigma_source", "natural_voltage")),
+            sigma_factor=float(kwargs.get("sigma_factor", 1.0)),
             eps=float(kwargs.get("eps", 0.3)),
             observable_space=str(kwargs.get("observable_space", "rate")),
             inject_space=str(kwargs.get("inject_space", "rate")),
@@ -223,6 +229,7 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
             batches=context.batches,
             sigma=kwargs.get("sigma"),
             sigma_source=str(kwargs.get("sigma_source", "natural_voltage")),
+            sigma_factor=float(kwargs.get("sigma_factor", 1.0)),
             eps=float(kwargs.get("eps", 0.3)),
             observable_space=str(kwargs.get("observable_space", "rate")),
             inject_space=str(kwargs.get("inject_space", "rate")),

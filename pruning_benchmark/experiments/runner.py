@@ -202,6 +202,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             observable_space = str(options.pop("sim_np_observable_space", "rate"))
             inject_space = str(options.pop("sim_np_inject_space", "rate"))
             centering = str(options.pop("sim_np_centering", "trajectory_mean"))
+            sigma_factor = float(options.pop("sim_np_sigma_factor", 1.0))
             max_samples = int(options.pop("sim_np_max_samples", 25_000))
             burn_in_steps = int(options.pop("sim_np_burn_in_steps", 300))
             manual_sigma = options.pop("sim_np_sigma", None)
@@ -216,6 +217,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
                 prune_meta["sim_np_sigma"] = None
             prune_kwargs.update({
                 "sigma_source": sigma_source,
+                "sigma_factor": sigma_factor,
                 "observable_space": observable_space,
                 "inject_space": inject_space,
                 "centering": centering,
@@ -226,6 +228,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
                 prune_kwargs["rng_seed"] = rng_seed
             prune_meta.update({
                 "sim_np_sigma_source": sigma_source,
+                "sim_np_sigma_factor": sigma_factor,
                 "sim_np_observable_space": observable_space,
                 "sim_np_inject_space": inject_space,
                 "sim_np_centering": centering,
@@ -236,6 +239,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             for key in (
                 "sim_np_sigma",
                 "sim_np_sigma_source",
+                "sim_np_sigma_factor",
                 "sim_np_observable_space",
                 "sim_np_inject_space",
                 "sim_np_centering",
@@ -252,6 +256,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             "noise_rng_seed",
             "sim_np_sigma",
             "sim_np_sigma_source",
+            "sim_np_sigma_factor",
             "sim_np_observable_space",
             "sim_np_inject_space",
             "sim_np_centering",
@@ -1302,6 +1307,8 @@ def run_prune_experiment(
             config_metadata.update({
                 "sim_np_sigma": prune_meta.get("sim_np_sigma"),
                 "sim_np_sigma_source": prune_meta.get("sim_np_sigma_source"),
+                "sim_np_sigma_factor": prune_meta.get("sim_np_sigma_factor"),
+                "prune_sim_np_sigma_factor": prune_meta.get("sim_np_sigma_factor"),
                 "sim_np_observable_space": prune_meta.get("sim_np_observable_space"),
                 "sim_np_inject_space": prune_meta.get("sim_np_inject_space"),
                 "sim_np_centering": prune_meta.get("sim_np_centering"),
