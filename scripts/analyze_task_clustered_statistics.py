@@ -8,6 +8,24 @@ tasks.  This script quantifies that clustering and re-tests every comparison at
 the task level, so a reader can check that no conclusion depends on pooling
 task-level and seed-level variance together.
 
+What is fitted
+--------------
+The reviewer asked for *either* aggregation to n = 8 *or* a mixed-effects model with
+task as a random effect.  Both are provided, and for this design they coincide.
+
+``random_intercept_fit`` fits ``d_ij = mu + u_i + e_ij`` with task as a random
+intercept.  The design is balanced -- three trained networks per task for every method
+-- so the REML solution is closed form and is computed directly rather than by
+iterative optimisation; no extra dependency is required.  Variance components
+(``var_task``, ``var_residual``) and the resulting ICC are reported so the fit can be
+inspected, not just its p-value.  For balanced data the fixed-effect test uses the
+between-task mean square and therefore reduces exactly to a paired t on the task means;
+the script asserts this agreement rather than assuming it.
+
+``leave_one_task_out`` re-runs the task-level test dropping each task in turn, which
+answers the reviewer's stated reason for wanting per-task curves -- whether a result is
+carried by a handful of tasks -- rather than leaving the reader to eyeball a figure.
+
 Why not the exact signed-rank test at the task level
 ----------------------------------------------------
 Aggregating to 8 task means and re-running the exact two-sided Wilcoxon gives a
@@ -44,6 +62,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import t as student_t
 from scipy.stats import ttest_1samp, wilcoxon
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,6 +133,71 @@ def icc_one_way(values: np.ndarray, tasks: np.ndarray) -> tuple[float, float, fl
     return icc, float(design_effect), float(n_total / design_effect)
 
 
+def random_intercept_fit(values: np.ndarray, tasks: np.ndarray) -> dict:
+    """Fit ``d_ij = mu + u_i + e_ij`` with task as a random intercept.
+
+    Returns the fixed-effect estimate with its standard error, t, df and p, plus the
+    REML variance components and their ICC. Balanced data only: the closed-form
+    solution below assumes an equal number of networks per task, which holds here
+    (three seeds per task for every method). Raises if that is violated, rather than
+    returning a silently wrong fit.
+    """
+    frame = pd.DataFrame({"d": values, "task": tasks})
+    sizes = frame.groupby("task").size()
+    if sizes.nunique() != 1:
+        raise ValueError(
+            f"random_intercept_fit requires a balanced design; group sizes were {sorted(sizes)}"
+        )
+    n_tasks = int(sizes.size)
+    per_task = int(sizes.iloc[0])
+    grand = float(frame["d"].mean())
+    task_means = frame.groupby("task")["d"].mean()
+    ms_between = per_task * float(((task_means - grand) ** 2).sum()) / (n_tasks - 1)
+    ms_within = float(
+        frame.groupby("task")["d"].apply(lambda s: ((s - s.mean()) ** 2).sum()).sum()
+    ) / (n_tasks * (per_task - 1))
+    var_task = max((ms_between - ms_within) / per_task, 0.0)
+    var_residual = ms_within
+    total = var_task + var_residual
+    standard_error = math.sqrt(ms_between / (n_tasks * per_task))
+    t_stat = grand / standard_error if standard_error > 0 else math.nan
+    df = n_tasks - 1
+    p_value = float(2.0 * student_t.sf(abs(t_stat), df)) if standard_error > 0 else 1.0
+    return {
+        "mixed_mu": grand,
+        "mixed_se": standard_error,
+        "mixed_t": float(t_stat),
+        "mixed_df": df,
+        "mixed_p": p_value,
+        "mixed_var_task": var_task,
+        "mixed_var_residual": var_residual,
+        "mixed_icc": float(var_task / total) if total > 0 else 0.0,
+    }
+
+
+def leave_one_task_out(values: np.ndarray, tasks: np.ndarray) -> dict:
+    """Re-run the task-level test dropping each task in turn.
+
+    Reports the worst (largest) p-value over the leave-one-out refits and whether the
+    alpha-level verdict is unchanged throughout, i.e. whether the conclusion depends on
+    any single task.
+    """
+    frame = pd.DataFrame({"d": values, "task": tasks})
+    task_means = frame.groupby("task")["d"].mean()
+    full_p = float(ttest_1samp(task_means.to_numpy(), 0.0).pvalue)
+    worst_p, worst_task = full_p, ""
+    for dropped in task_means.index:
+        kept = task_means.drop(dropped)
+        p_value = float(ttest_1samp(kept.to_numpy(), 0.0).pvalue)
+        if p_value > worst_p:
+            worst_p, worst_task = p_value, str(dropped)
+    return {
+        "loo_worst_p": worst_p,
+        "loo_worst_dropped_task": worst_task,
+        "loo_verdict_stable": bool((worst_p <= ALPHA) == (full_p <= ALPHA)),
+    }
+
+
 def cluster_bootstrap(values: np.ndarray, tasks: np.ndarray, rng: np.random.Generator):
     """Percentile CI and inverted p from resampling whole tasks with replacement."""
     groups = [g.to_numpy() for _, g in pd.DataFrame({"d": values, "t": tasks}).groupby("t")["d"]]
@@ -149,6 +233,14 @@ def build_tests(cells: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
                                method="auto").pvalue)
                 if len(nonzero8) else 1.0
             )
+            mixed = random_intercept_fit(diff.to_numpy(), tasks)
+            loo = leave_one_task_out(diff.to_numpy(), tasks)
+            if not math.isclose(mixed["mixed_t"], float(t_res.statistic), rel_tol=1e-9,
+                                abs_tol=1e-12):
+                raise AssertionError(
+                    "random-intercept fixed effect disagrees with the paired t on task means: "
+                    f"{mixed['mixed_t']} vs {t_res.statistic}"
+                )
             records.append({
                 "dataset": "main_h512",
                 "family": "task_clustered_sequence_retention_pairwise_by_sparsity",
@@ -183,6 +275,8 @@ def build_tests(cells: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
                 "wilcoxon_task_level_at_floor": bool(abs(w8 - n8_floor) < 1e-12),
                 "alpha": ALPHA,
                 "multiple_comparison_method": "Holm correction within family",
+                **mixed,
+                **loo,
             })
     out = pd.DataFrame.from_records(records)
     out["family_size"] = len(out)
