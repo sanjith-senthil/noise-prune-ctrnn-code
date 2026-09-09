@@ -166,10 +166,14 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
     if strategy in {
         "noise_prune",
         "noise_prune_capped_rescale",
+        "noise_prune_shuffled_rescale",
+        "noise_prune_uniform_rescale",
         "vanilla_mask_only",
         "simulation_noise_prune_mask_only",
         "simulation_noise_prune_rescale",
         "simulation_noise_prune_capped_rescale",
+        "simulation_noise_prune_shuffled_rescale",
+        "simulation_noise_prune_uniform_rescale",
     }:
         sigma = float(options.pop("noise_sigma", 1.0))
         eps = float(options.pop("noise_eps", 0.3))
@@ -191,6 +195,8 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             "simulation_noise_prune_mask_only",
             "simulation_noise_prune_rescale",
             "simulation_noise_prune_capped_rescale",
+            "simulation_noise_prune_shuffled_rescale",
+            "simulation_noise_prune_uniform_rescale",
         }:
             sigma_source = str(options.pop("sim_np_sigma_source", "natural_voltage"))
             observable_space = str(options.pop("sim_np_observable_space", "rate"))
@@ -275,6 +281,25 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
     else:
         for key in ("rescale_cap_mode", "rescale_cap_value", "rescale_cap_quantile"):
             options.pop(key, None)
+    if strategy in {
+        "noise_prune_shuffled_rescale",
+        "noise_prune_uniform_rescale",
+        "simulation_noise_prune_shuffled_rescale",
+        "simulation_noise_prune_uniform_rescale",
+    }:
+        control_seed_raw = options.pop("prob_control_seed", None)
+        if control_seed_raw is not None:
+            control_seed = int(control_seed_raw)
+            prune_kwargs["prob_control_seed"] = control_seed
+            prune_meta["prob_control_seed"] = control_seed
+    else:
+        options.pop("prob_control_seed", None)
+    if strategy in {"l1_unstructured_gain", "random_unstructured_gain"}:
+        gain_mode = str(options.pop("gain_mode", "inv_density"))
+        prune_kwargs["gain_mode"] = gain_mode
+        prune_meta["gain_mode"] = gain_mode
+    else:
+        options.pop("gain_mode", None)
     for key in ("obs_num_samples", "obs_cg_iters"):
         options.pop(key, None)
     if strategy == "obs_compensated":
@@ -1243,10 +1268,14 @@ def run_prune_experiment(
     if strategy in {
         "noise_prune",
         "noise_prune_capped_rescale",
+        "noise_prune_shuffled_rescale",
+        "noise_prune_uniform_rescale",
         "vanilla_mask_only",
         "simulation_noise_prune_mask_only",
         "simulation_noise_prune_rescale",
         "simulation_noise_prune_capped_rescale",
+        "simulation_noise_prune_shuffled_rescale",
+        "simulation_noise_prune_uniform_rescale",
     }:
         config_metadata.update({
             "noise_sigma": prune_meta.get("sigma"),
@@ -1260,11 +1289,15 @@ def run_prune_experiment(
             "prune_leak_shift": prune_meta.get("leak_shift"),
             "prune_matched_diagonal": prune_meta.get("matched_diagonal"),
             "prune_rng_seed": prune_meta.get("rng_seed"),
+            "prob_control_seed": prune_meta.get("prob_control_seed"),
+            "prune_prob_control_seed": prune_meta.get("prob_control_seed"),
         })
         if strategy in {
             "simulation_noise_prune_mask_only",
             "simulation_noise_prune_rescale",
             "simulation_noise_prune_capped_rescale",
+            "simulation_noise_prune_shuffled_rescale",
+            "simulation_noise_prune_uniform_rescale",
         }:
             config_metadata.update({
                 "sim_np_sigma": prune_meta.get("sim_np_sigma"),

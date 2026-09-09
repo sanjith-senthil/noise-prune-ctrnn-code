@@ -65,6 +65,8 @@ def noise_prune(
     rescale_damping: Optional[ArrayLike] = None,
     rescale_cap: Optional[float] = None,
     rescale_cap_quantile: Optional[float] = None,
+    prob_control: str = "none",
+    prob_control_seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     """Prune continuous-time operator using the covariance "noise probe" rule.
 
@@ -184,6 +186,13 @@ def noise_prune(
         raw_probs = raw_probs * scale_factor
 
     probs = np.clip(raw_probs, 0.0, 1.0)
+
+    from .score_controls import apply_probability_control
+
+    probs, control_stats = apply_probability_control(
+        probs, control=prob_control, seed=prob_control_seed
+    )
+
     positive_probs = probs[probs > 0.0]
     inv_positive_probs = 1.0 / positive_probs if positive_probs.size else np.array([], dtype=np.float64)
     cap_value: Optional[float] = None
@@ -267,6 +276,7 @@ def noise_prune(
         "rescale_damping_max": float(np.max(damping_float[off_mask])) if damping_float is not None else 1.0,
         "kept_rescale_damping_mean": float(np.mean(kept_damping)) if kept_damping.size else 0.0,
     }
+    stats.update(control_stats)
 
     return pruned_A.astype(orig_dtype, copy=False), stats
 

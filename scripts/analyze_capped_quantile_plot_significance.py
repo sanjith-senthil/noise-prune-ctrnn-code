@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import binomtest, wilcoxon
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from pruning_benchmark.analysis.effect_sizes import paired_effect_sizes  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,6 +133,13 @@ def add_q100_units(unit: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out-dir", type=Path, default=OUT_CSV.parent,
+                        help="directory for the generated CSV (default: the frozen capped_rescale dir)")
+    args = parser.parse_args()
+    out_csv = args.out_dir / OUT_CSV.name
     unit = add_q100_units(load_unit_table())
     records = []
     for family in ["L-NP", "S-NP"]:
@@ -188,6 +199,7 @@ def main() -> None:
                     "wilcoxon_p": wilcox_p,
                     "sign_test_name": "exact two-sided binomial sign test",
                     "sign_test_p": sign_p,
+                    **paired_effect_sizes(nonzero.to_numpy(), alpha=0.05),
                 }
             )
 
@@ -196,8 +208,9 @@ def main() -> None:
     out["sign_test_holm_p_within_family"] = holm_adjust(out["sign_test_p"].tolist())
     out["reject_holm_alpha_0p05"] = out["holm_p_within_family"] <= 0.05
     out["sign_test_reject_holm_alpha_0p05"] = out["sign_test_holm_p_within_family"] <= 0.05
-    out.to_csv(OUT_CSV, index=False)
-    print(f"wrote {OUT_CSV}")
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_csv, index=False)
+    print(f"wrote {out_csv}")
     print(f"rows: {len(out)}")
 
 

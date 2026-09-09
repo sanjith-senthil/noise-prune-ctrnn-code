@@ -10,6 +10,7 @@ import torch
 from torch.nn.utils import prune
 
 from .pruners import BasePruner, PruneContext
+from .score_controls import apply_probability_control
 from .simulation_noise_prune import (
     _as_numpy_batches,
     _collect_centered_samples,
@@ -37,6 +38,8 @@ def simulation_noise_prune_rescale_recurrent(
     rng_seed: int | None = None,
     rescale_cap: float | None = None,
     rescale_cap_quantile: float | None = None,
+    prob_control: str = "none",
+    prob_control_seed: int | None = None,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
     if include_feedforward:
@@ -82,6 +85,9 @@ def simulation_noise_prune_rescale_recurrent(
         np.fill_diagonal(off_mask, False)
     rows, cols = np.where(off_mask)
     flat_probs = probs[rows, cols]
+    flat_probs, control_stats = apply_probability_control(
+        flat_probs, control=prob_control, seed=prob_control_seed
+    )
     draws = rng.random(size=flat_probs.shape[0])
     keep = draws < flat_probs
 
@@ -158,6 +164,7 @@ def simulation_noise_prune_rescale_recurrent(
         "kept_amp_mean": float(np.mean(amp)) if amp.size else 0.0,
         "kept_amp_max": float(np.max(amp)) if amp.size else 0.0,
     })
+    stats.update(control_stats)
     return stats
 
 
@@ -167,6 +174,7 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
     description = "Simulation-based noise-prune with expectation-preserving rescaling."
     requires_batches = True
     default_batch_count = 20
+    prob_control = "none"
 
     def apply(
         self,
@@ -189,6 +197,8 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
             rng_seed=kwargs.get("rng_seed"),
             rescale_cap=kwargs.get("rescale_cap"),
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
+            prob_control=str(kwargs.get("prob_control", self.prob_control)),
+            prob_control_seed=kwargs.get("prob_control_seed"),
             include_feedforward=context.prune_feedforward,
         )
 
@@ -199,6 +209,7 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
     description = "Simulation-based noise-prune with capped rescale amplification."
     requires_batches = True
     default_batch_count = 20
+    prob_control = "none"
 
     def apply(
         self,
@@ -221,12 +232,42 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
             rng_seed=kwargs.get("rng_seed"),
             rescale_cap=kwargs.get("rescale_cap"),
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
+            prob_control=str(kwargs.get("prob_control", self.prob_control)),
+            prob_control_seed=kwargs.get("prob_control_seed"),
             include_feedforward=context.prune_feedforward,
         )
+
+
+class SimulationNoisePruneShuffledRescaleStrategy(SimulationNoisePruneRescaleStrategy):
+    """S-NP rescale with the probability-to-edge assignment destroyed.
+
+    Preserves the multiset of retention probabilities exactly, so expected
+    density and the amplification distribution match the informative run.
+    """
+
+    name = "simulation_noise_prune_shuffled_rescale"
+    aliases = ("snp_shuffled_rescale",)
+    description = "S-NP sample-and-rescale with shuffled (uninformative) probabilities."
+    prob_control = "shuffle"
+
+
+class SimulationNoisePruneUniformRescaleStrategy(SimulationNoisePruneRescaleStrategy):
+    """S-NP rescale with every retention probability set to the mean.
+
+    Stochastic masking plus a single constant gain restoration, carrying no
+    per-edge information, at the same expected density as the informative run.
+    """
+
+    name = "simulation_noise_prune_uniform_rescale"
+    aliases = ("snp_uniform_rescale",)
+    description = "S-NP sample-and-rescale with uniform (uninformative) probabilities."
+    prob_control = "uniform"
 
 
 __all__ = [
     "SimulationNoisePruneCappedRescaleStrategy",
     "SimulationNoisePruneRescaleStrategy",
+    "SimulationNoisePruneShuffledRescaleStrategy",
+    "SimulationNoisePruneUniformRescaleStrategy",
     "simulation_noise_prune_rescale_recurrent",
 ]

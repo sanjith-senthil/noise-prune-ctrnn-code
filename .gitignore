@@ -29,3 +29,8 @@ checkpoints/
 results/
 plots/
 archives/
+
+# local convenience symlinks into the working tree (not part of the release)
+/checkpoints
+/results
+/paper_artifacts

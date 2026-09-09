@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import itertools
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import binomtest, wilcoxon
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from pruning_benchmark.analysis.effect_sizes import paired_effect_sizes  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -156,6 +160,7 @@ def test_row(
     losses = int((diff < 0.0).sum())
     sign_n = wins + losses
     sign_p = float(binomtest(wins, sign_n, 0.5, alternative="two-sided").pvalue) if sign_n else 1.0
+    effects = paired_effect_sizes(nonzero.to_numpy(), alpha=ALPHA)
     return {
         "dataset": dataset,
         "family": family,
@@ -173,6 +178,7 @@ def test_row(
         "multiple_comparison_method": "Holm correction within family",
         "normality_required": False,
         "wilcoxon_paired_difference_symmetry_assumption": True,
+        **effects,
         "robustness_test_name": "exact binomial sign test",
         "n": int(len(diff)),
         "n_nonzero_differences": int(len(nonzero)),
@@ -290,6 +296,16 @@ def amplification_descriptives() -> pd.DataFrame:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out-dir", type=Path, default=OUT,
+                        help="directory for the generated CSVs (default: the frozen significance dir)")
+    args = parser.parse_args()
+    out_dir = args.out_dir
+    tests_out = out_dir / TESTS_OUT.name
+    descriptives_out = out_dir / DESCRIPTIVES_OUT.name
+    amplification_out = out_dir / AMPLIFICATION_OUT.name
     datasets = {
         "main_h512": (pd.read_csv(MAIN), MAIN_METHODS),
         "exploratory_capped_probe_h512": (pd.read_csv(CAP), CAP_METHODS),
@@ -325,19 +341,19 @@ def main() -> None:
     test_df = pd.DataFrame(tests)
     test_df["wilcoxon_reject_holm_alpha_0_05"] = test_df["holm_p_within_family"] <= ALPHA
     test_df["sign_test_reject_holm_alpha_0_05"] = test_df["sign_test_holm_p_within_family"] <= ALPHA
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     test_df.sort_values(["dataset", "metric", "unit", "pruning_pct", "method_a", "method_b"]).to_csv(
-        TESTS_OUT, index=False
+        tests_out, index=False
     )
     pd.DataFrame(descriptives).sort_values(
         ["dataset", "metric", "unit", "pruning_pct", "method"]
-    ).to_csv(DESCRIPTIVES_OUT, index=False)
+    ).to_csv(descriptives_out, index=False)
     amplification_descriptives().sort_values(["method_family", "metric"]).to_csv(
-        AMPLIFICATION_OUT, index=False
+        amplification_out, index=False
     )
-    print(f"wrote {TESTS_OUT}")
-    print(f"wrote {DESCRIPTIVES_OUT}")
-    print(f"wrote {AMPLIFICATION_OUT}")
+    print(f"wrote {tests_out}")
+    print(f"wrote {descriptives_out}")
+    print(f"wrote {amplification_out}")
     print(f"comparison tests: {len(test_df)}")
     print(f"descriptive rows: {len(descriptives)}")
 

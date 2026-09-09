@@ -37,6 +37,7 @@ class BasePruner:
     default_batch_count: int = 0
     aliases: Sequence[str] = ()
     supports_pretrain: bool = False
+    prob_control: str = "none"
 
     def resolved_batch_count(self, requested: Optional[int]) -> int:
         if not self.requires_batches:

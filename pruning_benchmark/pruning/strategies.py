@@ -22,6 +22,8 @@ from .simulation_noise_prune import SimulationNoisePruneStrategy
 from .simulation_noise_prune_rescale import (
     SimulationNoisePruneCappedRescaleStrategy,
     SimulationNoisePruneRescaleStrategy,
+    SimulationNoisePruneShuffledRescaleStrategy,
+    SimulationNoisePruneUniformRescaleStrategy,
 )
 from .vanilla_mask_prune import VanillaMaskNoisePruneStrategy
 
@@ -211,6 +213,8 @@ def noise_prune_recurrent(
     max_attempts: int = 5,
     rescale_cap: Optional[float] = None,
     rescale_cap_quantile: Optional[float] = None,
+    prob_control: str = "none",
+    prob_control_seed: Optional[int] = None,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
     amount = validate_prune_fraction(float(amount))
@@ -242,6 +246,8 @@ def noise_prune_recurrent(
                 target_density=desired_density,
                 rescale_cap=rescale_cap,
                 rescale_cap_quantile=rescale_cap_quantile,
+                prob_control=prob_control,
+                prob_control_seed=prob_control_seed,
             )
             stats = _prune_stats_mapping(noise_stats)
             stats["leak_shift"] = float(current_shift)
@@ -478,6 +484,7 @@ class NoisePruneStrategy(BasePruner):
         state: Mapping[str, object],
         **kwargs,
     ) -> Mapping[str, float]:
+        kwargs.setdefault("prob_control", self.prob_control)
         try:
             return noise_prune_recurrent(
                 context.model,
@@ -506,6 +513,7 @@ class NoisePruneCappedRescaleStrategy(BasePruner):
         state: Mapping[str, object],
         **kwargs,
     ) -> Mapping[str, float]:
+        kwargs.setdefault("prob_control", self.prob_control)
         return noise_prune_recurrent(
             context.model,
             context.amount,
@@ -561,6 +569,81 @@ class OBSCompensatedPruner(BasePruner):
         )
 
 
+@torch.no_grad()
+def _offdiag_abs_sum(model: CTRNN) -> float:
+    """Absolute sum of the off-diagonal recurrent weights of an unpruned model."""
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return 0.0
+    weight = getattr(layer, "weight_orig", layer.weight).detach()
+    offdiag = ~torch.eye(weight.shape[0], dtype=torch.bool, device=weight.device)
+    return float(weight[offdiag].abs().sum().item())
+
+
+class NoisePruneShuffledRescaleStrategy(NoisePruneStrategy):
+    """L-NP rescale with the probability-to-edge assignment destroyed."""
+
+    name = "noise_prune_shuffled_rescale"
+    aliases = ("lnp_shuffled_rescale",)
+    description = "L-NP sample-and-rescale with shuffled (uninformative) probabilities."
+    prob_control = "shuffle"
+
+
+class NoisePruneUniformRescaleStrategy(NoisePruneStrategy):
+    """L-NP rescale with every retention probability set to the mean."""
+
+    name = "noise_prune_uniform_rescale"
+    aliases = ("lnp_uniform_rescale",)
+    description = "L-NP sample-and-rescale with uniform (uninformative) probabilities."
+    prob_control = "uniform"
+
+
+class L1UnstructuredGainPruner(BasePruner):
+    """Magnitude pruning with survivors rescaled to matched recurrent gain."""
+
+    name = "l1_unstructured_gain"
+    aliases = ("l1_gain", "magnitude_gain")
+    description = "Magnitude pruning with uniform 1/(retained density) gain restoration."
+
+    def apply(self, context: PruneContext, state: Mapping[str, object], **kwargs) -> Mapping[str, float]:
+        from .score_controls import restore_uniform_gain
+
+        reference_l1 = _offdiag_abs_sum(context.model)
+        prune_l1_unstructured(
+            context.model,
+            context.amount,
+            include_feedforward=context.prune_feedforward,
+        )
+        return restore_uniform_gain(
+            context.model,
+            gain_mode=str(kwargs.get("gain_mode", "inv_density")),
+            reference_offdiag_l1=reference_l1,
+        )
+
+
+class RandomUnstructuredGainPruner(BasePruner):
+    """Random pruning with survivors rescaled to matched recurrent gain."""
+
+    name = "random_unstructured_gain"
+    aliases = ("random_gain",)
+    description = "Random pruning with uniform 1/(retained density) gain restoration."
+
+    def apply(self, context: PruneContext, state: Mapping[str, object], **kwargs) -> Mapping[str, float]:
+        from .score_controls import restore_uniform_gain
+
+        reference_l1 = _offdiag_abs_sum(context.model)
+        prune_random_unstructured(
+            context.model,
+            context.amount,
+            include_feedforward=context.prune_feedforward,
+        )
+        return restore_uniform_gain(
+            context.model,
+            gain_mode=str(kwargs.get("gain_mode", "inv_density")),
+            reference_offdiag_l1=reference_l1,
+        )
+
+
 # Register built-in strategies
 register_pruner(NoisePruneStrategy())
 register_pruner(NoisePruneCappedRescaleStrategy())
@@ -571,6 +654,12 @@ register_pruner(SimulationNoisePruneCappedRescaleStrategy())
 register_pruner(RandomUnstructuredPruner())
 register_pruner(L1UnstructuredPruner())
 register_pruner(OBSCompensatedPruner())
+register_pruner(NoisePruneShuffledRescaleStrategy())
+register_pruner(NoisePruneUniformRescaleStrategy())
+register_pruner(SimulationNoisePruneShuffledRescaleStrategy())
+register_pruner(SimulationNoisePruneUniformRescaleStrategy())
+register_pruner(L1UnstructuredGainPruner())
+register_pruner(RandomUnstructuredGainPruner())
 
 
 __all__ = [
