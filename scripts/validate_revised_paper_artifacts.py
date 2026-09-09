@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 import math
 from pathlib import Path
@@ -93,6 +94,10 @@ RESCALE_OVERALL = RESCALE_DIR / "rescale_value_histogram_snp_lnp_p80_overall.csv
 RESCALE_BY_RUN_WIDE = RESCALE_DIR / "rescale_value_histogram_snp_lnp_p80_by_run_logbin0p20.csv"
 RESCALE_OVERALL_WIDE = RESCALE_DIR / "rescale_value_histogram_snp_lnp_p80_overall_logbin0p20.csv"
 MANIFEST = REVISED / "artifact_manifest.json"
+# Number of records the frozen artifact manifest is expected to carry. This is a guard
+# against the artifact set changing unnoticed; update it (or pass --expect-manifest-files)
+# whenever artifacts are deliberately added or removed, and say why in the commit message.
+EXPECTED_MANIFEST_FILES = 53
 OFFDIAG_EDGES = 512 * 511
 FULL_EDGES = 512 * 512
 SUMMARY_METRICS = (
@@ -698,19 +703,41 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_manifest() -> None:
+def validate_manifest(expected_files: int = EXPECTED_MANIFEST_FILES) -> int:
+    """Verify the frozen artifact manifest and return the number of records checked.
+
+    Every listed file must exist with the recorded byte size and SHA-256. The record
+    count is also checked against ``expected_files`` so that artifacts cannot be added
+    or dropped unnoticed; the message reports both values so the fix is obvious.
+    """
     payload = json.loads(MANIFEST.read_text())
     require(payload["artifact_set"] == "official_h512_24net_revised_scope", "unexpected artifact manifest label")
     require(payload["hash_algorithm"] == "sha256", "unexpected artifact manifest hash algorithm")
-    require(len(payload["files"]) == 45, "unexpected artifact manifest file count")
+    actual_files = len(payload["files"])
+    require(
+        actual_files == expected_files,
+        f"artifact manifest file count is {actual_files}, expected {expected_files}; "
+        f"if this change is intended, update EXPECTED_MANIFEST_FILES or pass "
+        f"--expect-manifest-files {actual_files}",
+    )
     for record in payload["files"]:
         path = ROOT / "paper_artifacts/official_h512_24net" / record["path"]
         require(path.is_file(), f"manifest file missing: {path}")
         require(path.stat().st_size == int(record["bytes"]), f"manifest byte-size mismatch: {path}")
         require(sha256(path) == record["sha256"], f"manifest SHA-256 mismatch: {path}")
+    return actual_files
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--expect-manifest-files",
+        type=int,
+        default=EXPECTED_MANIFEST_FILES,
+        help="number of records the artifact manifest should contain "
+             f"(default: {EXPECTED_MANIFEST_FILES})",
+    )
+    args = parser.parse_args()
     main = pd.read_csv(MAIN)
     main_summary = pd.read_csv(MAIN_SUMMARY)
     cap = pd.read_csv(CAP)
@@ -736,7 +763,7 @@ def main() -> None:
     validate_rescale_distributions(main, match)
     validate_cap_percentile_curve(main_summary, match)
     validate_three_seed_cap_percentile_curve()
-    validate_manifest()
+    manifest_files = validate_manifest(args.expect_manifest_files)
     print("validated revised paper artifacts")
     print("main rows: 1464; exploratory cap rows: 408; matched q50 rows: 1176")
     print("summary units: trained-network n=24; clustered task-mean n=8")
@@ -744,7 +771,7 @@ def main() -> None:
     print("rescale-distribution runs: 144; histogram candidate-edge totals verified")
     print("wide-bin rescale histograms: log10 bin width=0.20; totals verified")
     print("cap-percentile curve rows: one-seed raw=1464; three-seed raw=3096; combined=5184; summary=72; plot points=22")
-    print("release manifest: 45 SHA-256 hashes verified")
+    print(f"release manifest: {manifest_files} SHA-256 hashes verified")
 
 
 if __name__ == "__main__":
