@@ -579,6 +579,7 @@ def simulation_noise_prune_recurrent(
         batches=batches,
         sigma=sigma,
         sigma_source=sigma_source,
+        sigma_factor=sigma_factor,
         eps=eps,
         observable_space=observable_space,
         inject_space=inject_space,

@@ -12,13 +12,14 @@
 # still exceeds one core per worker despite these env vars.
 #
 # Usage:
-#   scripts/run_tanh_h512_modcog_revised8_revision_suites.sh [PYTHON] [JOBS] [THREADS]
+#   scripts/run_tanh_h512_modcog_revised8_revision_suites.sh [PYTHON] [JOBS] [THREADS] [SUITE]
 
 set -uo pipefail
 
 PYTHON="${1:-python3}"
 MAX_JOBS="${2:-8}"
 THREADS="${3:-1}"
+SUITE="${4:-both}"   # both | low_sparsity | noise_necessity
 
 LOW_STEM="task_preservation_tanh_h512_modcog_revised8_12k_seqbest_low_sparsity_p10_40"
 NOISE_STEM="task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_necessity_p50_80"
@@ -38,8 +39,15 @@ export TORCH_NUM_THREADS="${THREADS}"
 echo "generating per-task configs..."
 "${PYTHON}" scripts/generate_tanh_h512_modcog_revised8_revision_suites.py --validate-inputs || exit 1
 
+declare -a STEMS=()
+case "${SUITE}" in
+  low_sparsity)    STEMS=("${LOW_STEM}") ;;
+  noise_necessity) STEMS=("${NOISE_STEM}") ;;
+  *)               STEMS=("${LOW_STEM}" "${NOISE_STEM}") ;;
+esac
+
 declare -a JOBS=()
-for stem in "${LOW_STEM}" "${NOISE_STEM}"; do
+for stem in "${STEMS[@]}"; do
   mkdir -p "results/${stem}/logs"
   for task in "${TASKS[@]}"; do
     JOBS+=("${stem}:${task}")
@@ -72,7 +80,7 @@ done
 echo
 if (( status == 0 )); then
   echo "all configs complete; summarizing"
-  "${PYTHON}" scripts/summarize_tanh_h512_modcog_revised8_revision_suites.py
+  "${PYTHON}" scripts/summarize_tanh_h512_modcog_revised8_revision_suites.py --suite "${SUITE}"
 else
   echo "one or more configs failed; rerun this script to resume" >&2
 fi
