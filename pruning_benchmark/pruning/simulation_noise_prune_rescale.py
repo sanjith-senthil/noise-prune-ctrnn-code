@@ -41,8 +41,25 @@ def simulation_noise_prune_rescale_recurrent(
     rescale_cap_quantile: float | None = None,
     prob_control: str = "none",
     prob_control_seed: int | None = None,
+    zero_task_input: bool = False,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
+    """Simulation noise-prune with expectation-preserving rescaling.
+
+    ``zero_task_input`` is the complement of the sigma sweep. The sigma sweep
+    asks what happens with task input but no injected noise; this asks what
+    happens with injected noise but no task input. Together they bracket
+    reviewer 2's question of whether the pruning scores reflect task-driven or
+    noise-induced activity.
+
+    The task input is zeroed *after* sigma is resolved, never before. Sigma is
+    estimated from the natural variability of the task-driven network, so
+    zeroing the input first would drive that estimate to ~0 and the arm would
+    differ from the reference in two ways at once instead of one. Zeroing it
+    afterwards leaves the injected noise scale identical to the reference run,
+    so the only thing that changes is whether task drive is present while the
+    covariance is collected.
+    """
     if include_feedforward:
         raise NotImplementedError("simulation_noise_prune_rescale currently supports recurrent pruning only.")
     if not batches:
@@ -57,6 +74,8 @@ def simulation_noise_prune_rescale_recurrent(
     batch_arrays = _as_numpy_batches(batches)
     natural = _natural_variability_stats(net, batch_arrays, burn_in_steps=int(burn_in_steps))
     sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source, sigma_factor=sigma_factor)
+    if zero_task_input:
+        batch_arrays = [np.zeros_like(b) for b in batch_arrays]
     X, sim_stats = _collect_centered_samples(
         net,
         batch_arrays,
@@ -145,6 +164,7 @@ def simulation_noise_prune_rescale_recurrent(
         "centering": centering,
         "sigma_source": sigma_source if sigma is None else "manual",
         "sigma_used": float(sigma_used),
+        "zero_task_input": bool(zero_task_input),
         "amount": float(amount),
         "target_density": float(1.0 - amount),
         "enforced_density": float(mask.sum().item()) / float(mask.numel()),
@@ -208,6 +228,7 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
+            zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )
 
@@ -244,6 +265,7 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
+            zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )
 

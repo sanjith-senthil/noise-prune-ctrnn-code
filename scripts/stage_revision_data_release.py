@@ -66,6 +66,14 @@ SUITE_STEMS = {
         "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_score_control_round2_p50_80",
         "score_control_round2",
     ),
+    "covariance_ablation": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_covariance_ablation_full_p50_80",
+        "covariance_ablation",
+    ),
+    "noise_only": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_only_p50_80",
+        "noise_only",
+    ),
 }
 DM1ANTI_CHECKPOINT_DIRS = tuple(
     f"tanh_h512_modcog_dm1anti_to12k_lr0006_seqbest_no_l2_seed{seed}" for seed in (0, 1, 2)
@@ -100,6 +108,9 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
     for label, (stem, _config_dir) in SUITE_STEMS.items():
         suite_dir = RESULTS / stem
         for source in sorted(suite_dir.glob(f"{stem}_*.csv")):
+            pairs.append((source, revision / label / source.name))
+        # cross-suite deliverables are named for their purpose, not the stem
+        for source in sorted(suite_dir.glob("reviewer1_controls_*.csv")):
             pairs.append((source, revision / label / source.name))
 
     for pattern in DM1ANTI_RESULT_GLOBS:

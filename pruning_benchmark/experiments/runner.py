@@ -240,6 +240,9 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             inject_space = str(options.pop("sim_np_inject_space", "rate"))
             centering = str(options.pop("sim_np_centering", "trajectory_mean"))
             sigma_factor = float(options.pop("sim_np_sigma_factor", 1.0))
+            zero_task_input = bool(options.pop("sim_np_zero_task_input", False))
+            prune_kwargs["zero_task_input"] = zero_task_input
+            prune_meta["sim_np_zero_task_input"] = zero_task_input
             max_samples = int(options.pop("sim_np_max_samples", 25_000))
             burn_in_steps = int(options.pop("sim_np_burn_in_steps", 300))
             manual_sigma = options.pop("sim_np_sigma", None)
