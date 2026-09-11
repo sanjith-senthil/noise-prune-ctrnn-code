@@ -42,10 +42,30 @@ DEFAULT_DEPOSIT = PROJECT / "data_release_staging"
 RESULTS = PROJECT / "results"
 ANALYSIS = PROJECT / "analysis/revision_2026"
 
+# label -> (result stem, config directory under release_code_staging/configs)
+#
+# The config directory is named explicitly rather than derived from the stem.
+# Most suite generators put their per-task configs in ``configs/<stem>/``, but
+# the two score-control suites use short directory names instead, and deriving
+# the path silently found nothing for them -- which is why the original deposit
+# shipped the round-1 score-control results with no configs alongside them.
 SUITE_STEMS = {
-    "score_controls": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_score_control_full_p50_80",
-    "low_sparsity": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_low_sparsity_p10_40",
-    "noise_necessity": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_necessity_p50_80",
+    "score_controls": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_score_control_full_p50_80",
+        "score_control_full",
+    ),
+    "low_sparsity": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_low_sparsity_p10_40",
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_low_sparsity_p10_40",
+    ),
+    "noise_necessity": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_necessity_p50_80",
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_necessity_p50_80",
+    ),
+    "score_controls_round2": (
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_score_control_round2_p50_80",
+        "score_control_round2",
+    ),
 }
 DM1ANTI_CHECKPOINT_DIRS = tuple(
     f"tanh_h512_modcog_dm1anti_to12k_lr0006_seqbest_no_l2_seed{seed}" for seed in (0, 1, 2)
@@ -77,7 +97,7 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
     pairs: List[Tuple[Path, Path]] = []
     revision = deposit / "results/revision_2026"
 
-    for label, stem in SUITE_STEMS.items():
+    for label, (stem, _config_dir) in SUITE_STEMS.items():
         suite_dir = RESULTS / stem
         for source in sorted(suite_dir.glob(f"{stem}_*.csv")):
             pairs.append((source, revision / label / source.name))
@@ -97,8 +117,15 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
             pairs.append((source, deposit / "checkpoints" / name / source.name))
 
     config_root = ROOT / "configs"
-    for stem in SUITE_STEMS.values():
-        for source in sorted((config_root / stem).glob("*.json")):
+    for stem, config_dir in SUITE_STEMS.values():
+        found = sorted((config_root / config_dir).glob("*.json"))
+        if not found:
+            raise SystemExit(
+                f"no configs found for suite '{stem}' in {config_root / config_dir}. "
+                f"A deposit that ships results without the configs that produced them is "
+                f"not reproducible; fix the path in SUITE_STEMS rather than skipping it."
+            )
+        for source in found:
             pairs.append((source, revision / "configs" / stem / source.name))
     for pattern in ("*modcog_dm1anti*.json",):
         for source in sorted(config_root.glob(pattern)):

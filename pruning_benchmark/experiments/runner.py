@@ -160,21 +160,64 @@ def _write_training_history(path: Path, rows: List[Dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key, "") for key in keys})
 
 
+# Strategies that take the shared noise parameters (sigma, eps, leak_shift,
+# matched_diagonal) and, critically, the seeded RNG.  The same sets also govern
+# which runs record those parameters in their result row.
+#
+# A strategy omitted here does not fail -- it silently falls through to the
+# pruning function's own defaults and an UNSEEDED generator, producing runs that
+# look fine, record NaN for every noise parameter, and cannot be reproduced.
+# That happened to noise_prune_magnitude_rescale,
+# simulation_noise_prune_magnitude_rescale and noise_prune_gain: each set was
+# written out as two separate literals in this file (kwargs extraction and
+# metadata recording) and the new strategies were added to none of the four.
+# They are two named constants now, and ``_assert_noise_strategies_registered``
+# makes a future omission fatal at import rather than silent at runtime.
+SIMULATION_NOISE_STRATEGIES = frozenset({
+    "simulation_noise_prune_mask_only",
+    "simulation_noise_prune_rescale",
+    "simulation_noise_prune_capped_rescale",
+    "simulation_noise_prune_shuffled_rescale",
+    "simulation_noise_prune_uniform_rescale",
+    "simulation_noise_prune_magnitude_rescale",
+})
+NOISE_PARAMETER_STRATEGIES = frozenset({
+    "noise_prune",
+    "noise_prune_capped_rescale",
+    "noise_prune_shuffled_rescale",
+    "noise_prune_uniform_rescale",
+    "noise_prune_magnitude_rescale",
+    "noise_prune_gain",
+    "vanilla_mask_only",
+}) | SIMULATION_NOISE_STRATEGIES
+
+
+def _assert_noise_strategies_registered() -> None:
+    """Fail loudly if a registered stochastic noise-prune strategy is ungated.
+
+    Any strategy whose pruning path consumes a random draw must appear in
+    ``NOISE_PARAMETER_STRATEGIES`` or its runs are unseeded and irreproducible.
+    Membership is checked against the live pruner registry, so adding a strategy
+    without wiring it here is caught immediately instead of silently producing
+    unusable results.
+    """
+    from pruning_benchmark.pruning.pruners import available_pruning_strategies
+
+    stochastic = {n for n in available_pruning_strategies()
+                  if "noise_prune" in n and not n.endswith("_mask_only")}
+    missing = sorted(stochastic - NOISE_PARAMETER_STRATEGIES)
+    if missing:
+        raise RuntimeError(
+            "Registered stochastic pruning strategies absent from "
+            f"NOISE_PARAMETER_STRATEGIES, so they would run unseeded: {missing}. "
+            "Add them to the set in runner.py before using them."
+        )
+
+
 def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     prune_kwargs: Dict[str, Any] = {}
     prune_meta: Dict[str, Any] = {}
-    if strategy in {
-        "noise_prune",
-        "noise_prune_capped_rescale",
-        "noise_prune_shuffled_rescale",
-        "noise_prune_uniform_rescale",
-        "vanilla_mask_only",
-        "simulation_noise_prune_mask_only",
-        "simulation_noise_prune_rescale",
-        "simulation_noise_prune_capped_rescale",
-        "simulation_noise_prune_shuffled_rescale",
-        "simulation_noise_prune_uniform_rescale",
-    }:
+    if strategy in NOISE_PARAMETER_STRATEGIES:
         sigma = float(options.pop("noise_sigma", 1.0))
         eps = float(options.pop("noise_eps", 0.3))
         leak_shift = float(options.pop("noise_leak_shift", 0.0))
@@ -191,13 +234,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             rng_seed = int(rng_seed)
             prune_meta["rng_seed"] = rng_seed
             prune_kwargs["rng"] = np.random.default_rng(rng_seed)
-        if strategy in {
-            "simulation_noise_prune_mask_only",
-            "simulation_noise_prune_rescale",
-            "simulation_noise_prune_capped_rescale",
-            "simulation_noise_prune_shuffled_rescale",
-            "simulation_noise_prune_uniform_rescale",
-        }:
+        if strategy in SIMULATION_NOISE_STRATEGIES:
             sigma_source = str(options.pop("sim_np_sigma_source", "natural_voltage"))
             observable_space = str(options.pop("sim_np_observable_space", "rate"))
             inject_space = str(options.pop("sim_np_inject_space", "rate"))
@@ -289,8 +326,10 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
     if strategy in {
         "noise_prune_shuffled_rescale",
         "noise_prune_uniform_rescale",
+        "noise_prune_magnitude_rescale",
         "simulation_noise_prune_shuffled_rescale",
         "simulation_noise_prune_uniform_rescale",
+        "simulation_noise_prune_magnitude_rescale",
     }:
         control_seed_raw = options.pop("prob_control_seed", None)
         if control_seed_raw is not None:
@@ -299,12 +338,17 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             prune_meta["prob_control_seed"] = control_seed
     else:
         options.pop("prob_control_seed", None)
-    if strategy in {"l1_unstructured_gain", "random_unstructured_gain"}:
+    if strategy in {"l1_unstructured_gain", "random_unstructured_gain", "noise_prune_gain"}:
         gain_mode = str(options.pop("gain_mode", "inv_density"))
         prune_kwargs["gain_mode"] = gain_mode
         prune_meta["gain_mode"] = gain_mode
+        gain_value_raw = options.pop("gain_value", None)
+        if gain_value_raw is not None:
+            prune_kwargs["gain_value"] = float(gain_value_raw)
+            prune_meta["gain_value"] = float(gain_value_raw)
     else:
         options.pop("gain_mode", None)
+        options.pop("gain_value", None)
     for key in ("obs_num_samples", "obs_cg_iters"):
         options.pop(key, None)
     if strategy == "obs_compensated":
@@ -1270,18 +1314,7 @@ def run_prune_experiment(
         "score_batch_min_valid": score_batch_min_valid,
     })
     config_metadata.update(source_metadata)
-    if strategy in {
-        "noise_prune",
-        "noise_prune_capped_rescale",
-        "noise_prune_shuffled_rescale",
-        "noise_prune_uniform_rescale",
-        "vanilla_mask_only",
-        "simulation_noise_prune_mask_only",
-        "simulation_noise_prune_rescale",
-        "simulation_noise_prune_capped_rescale",
-        "simulation_noise_prune_shuffled_rescale",
-        "simulation_noise_prune_uniform_rescale",
-    }:
+    if strategy in NOISE_PARAMETER_STRATEGIES:
         config_metadata.update({
             "noise_sigma": prune_meta.get("sigma"),
             "noise_eps": prune_meta.get("eps"),
@@ -1297,13 +1330,7 @@ def run_prune_experiment(
             "prob_control_seed": prune_meta.get("prob_control_seed"),
             "prune_prob_control_seed": prune_meta.get("prob_control_seed"),
         })
-        if strategy in {
-            "simulation_noise_prune_mask_only",
-            "simulation_noise_prune_rescale",
-            "simulation_noise_prune_capped_rescale",
-            "simulation_noise_prune_shuffled_rescale",
-            "simulation_noise_prune_uniform_rescale",
-        }:
+        if strategy in SIMULATION_NOISE_STRATEGIES:
             config_metadata.update({
                 "sim_np_sigma": prune_meta.get("sim_np_sigma"),
                 "sim_np_sigma_source": prune_meta.get("sim_np_sigma_source"),

@@ -190,7 +190,7 @@ def noise_prune(
     from .score_controls import apply_probability_control
 
     probs, control_stats = apply_probability_control(
-        probs, control=prob_control, seed=prob_control_seed
+        probs, control=prob_control, seed=prob_control_seed, magnitudes=abs_weights
     )
 
     positive_probs = probs[probs > 0.0]

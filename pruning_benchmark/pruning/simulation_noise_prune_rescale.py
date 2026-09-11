@@ -87,7 +87,10 @@ def simulation_noise_prune_rescale_recurrent(
     rows, cols = np.where(off_mask)
     flat_probs = probs[rows, cols]
     flat_probs, control_stats = apply_probability_control(
-        flat_probs, control=prob_control, seed=prob_control_seed
+        flat_probs,
+        control=prob_control,
+        seed=prob_control_seed,
+        magnitudes=np.abs(score_weights[rows, cols]),
     )
     draws = rng.random(size=flat_probs.shape[0])
     keep = draws < flat_probs
@@ -271,8 +274,24 @@ class SimulationNoisePruneUniformRescaleStrategy(SimulationNoisePruneRescaleStra
     prob_control = "uniform"
 
 
+class SimulationNoisePruneMagnitudeRescaleStrategy(SimulationNoisePruneRescaleStrategy):
+    """S-NP rescale with the covariance factor dropped from the probabilities.
+
+    Retention probabilities become proportional to ``|w_ij|`` alone rather than
+    to ``K |w_ij| (C_ii + C_jj -/+ 2 C_ij)``, at the same expected density.
+    This isolates the contribution of the covariance term specifically, as
+    opposed to ``shuffle``/``uniform``, which remove all per-edge information.
+    """
+
+    name = "simulation_noise_prune_magnitude_rescale"
+    aliases = ("snp_magnitude_rescale",)
+    description = "S-NP sample-and-rescale with covariance-free (magnitude-only) probabilities."
+    prob_control = "magnitude"
+
+
 __all__ = [
     "SimulationNoisePruneCappedRescaleStrategy",
+    "SimulationNoisePruneMagnitudeRescaleStrategy",
     "SimulationNoisePruneRescaleStrategy",
     "SimulationNoisePruneShuffledRescaleStrategy",
     "SimulationNoisePruneUniformRescaleStrategy",

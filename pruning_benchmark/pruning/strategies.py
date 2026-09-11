@@ -21,6 +21,7 @@ from .pruners import (
 from .simulation_noise_prune import SimulationNoisePruneStrategy
 from .simulation_noise_prune_rescale import (
     SimulationNoisePruneCappedRescaleStrategy,
+    SimulationNoisePruneMagnitudeRescaleStrategy,
     SimulationNoisePruneRescaleStrategy,
     SimulationNoisePruneShuffledRescaleStrategy,
     SimulationNoisePruneUniformRescaleStrategy,
@@ -580,6 +581,57 @@ def _offdiag_abs_sum(model: CTRNN) -> float:
     return float(weight[offdiag].abs().sum().item())
 
 
+@torch.no_grad()
+def _rowwise_offdiag_l1(model: CTRNN):
+    """Per-neuron total absolute off-diagonal input weight of an unpruned model."""
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return None
+    weight = getattr(layer, "weight_orig", layer.weight).detach()
+    offdiag = ~torch.eye(weight.shape[0], dtype=torch.bool, device=weight.device)
+    return (weight * offdiag).abs().sum(dim=1).clone()
+
+
+@torch.no_grad()
+def _offdiag_sq_sum(model: CTRNN) -> float:
+    """Sum of squared off-diagonal recurrent weights of an unpruned model."""
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return 0.0
+    weight = getattr(layer, "weight_orig", layer.weight).detach()
+    offdiag = ~torch.eye(weight.shape[0], dtype=torch.bool, device=weight.device)
+    return float((weight[offdiag] ** 2).sum().item())
+
+
+@torch.no_grad()
+def _reference_rho_jlin(model: CTRNN) -> tuple:
+    """``(rho(J_lin), alpha)`` for an unpruned model, with ``J_lin = (1-a)I + aW``.
+
+    ``alpha`` is read from the model rather than assumed, so a network trained
+    with a different ``dt``/``tau`` gets its own state-transition operator.
+    """
+    from .score_controls import spectral_radius
+
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return 0.0, 0.0
+    weight = getattr(layer, "weight_orig", layer.weight).detach()
+    alpha = float(getattr(model, "alpha", 0.0))
+    eye = torch.eye(weight.shape[0], dtype=weight.dtype, device=weight.device)
+    return spectral_radius((1.0 - alpha) * eye + alpha * weight), alpha
+
+
+@torch.no_grad()
+def _reference_spectral_radius(model: CTRNN) -> float:
+    """Spectral radius of the recurrent matrix of an unpruned model."""
+    from .score_controls import spectral_radius
+
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return 0.0
+    return spectral_radius(getattr(layer, "weight_orig", layer.weight))
+
+
 class NoisePruneShuffledRescaleStrategy(NoisePruneStrategy):
     """L-NP rescale with the probability-to-edge assignment destroyed."""
 
@@ -598,6 +650,62 @@ class NoisePruneUniformRescaleStrategy(NoisePruneStrategy):
     prob_control = "uniform"
 
 
+class NoisePruneMagnitudeRescaleStrategy(NoisePruneStrategy):
+    """L-NP rescale with the covariance factor dropped from the probabilities.
+
+    ``p_ij`` becomes proportional to ``|w_ij|`` alone rather than to
+    ``K |w_ij| (C_ii + C_jj -/+ 2 C_ij)``, at the same expected density, so the
+    contrast against ``noise_prune`` isolates the covariance term itself.
+    """
+
+    name = "noise_prune_magnitude_rescale"
+    aliases = ("lnp_magnitude_rescale",)
+    description = "L-NP sample-and-rescale with covariance-free (magnitude-only) probabilities."
+    prob_control = "magnitude"
+
+
+class NoisePruneGainPruner(NoisePruneStrategy):
+    """L-NP sample-and-rescale followed by an additional global gain scalar.
+
+    Noise-prune already rescales each survivor by ``1 / p_ij``, which makes the
+    pruned matrix an unbiased estimator of the original and leaves ``rho(W)``
+    close to its unpruned value with no further correction.  This arm exists to
+    test whether that is actually where noise-prune performs best: the sweep
+    over ``gain_value`` asks whether an extra global scalar on top of ``1 / p``
+    buys anything, which is the same question the magnitude gain sweep answers
+    for a deterministic mask.  ``gain_value = 1.0`` must reproduce plain
+    ``noise_prune`` exactly.
+    """
+
+    name = "noise_prune_gain"
+    aliases = ("lnp_gain",)
+    description = "L-NP sample-and-rescale with an additional global gain scalar."
+
+    def apply(self, context: PruneContext, state: Mapping[str, object], **kwargs):
+        from .score_controls import restore_uniform_gain
+
+        reference_l1 = _offdiag_abs_sum(context.model)
+        reference_rho = _reference_spectral_radius(context.model)
+        reference_l2 = _offdiag_sq_sum(context.model)
+        reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
+        reference_rowwise = _rowwise_offdiag_l1(context.model)
+        gain_mode = str(kwargs.pop("gain_mode", "fixed"))
+        gain_value = kwargs.pop("gain_value", None)
+        stats = dict(super().apply(context, state, **kwargs))
+        stats.update(restore_uniform_gain(
+            context.model,
+            gain_mode=gain_mode,
+            reference_offdiag_l1=reference_l1,
+            reference_spectral_radius=reference_rho,
+            reference_offdiag_l2=reference_l2,
+            reference_rho_jlin=reference_rho_jlin,
+            alpha=alpha,
+            reference_rowwise_l1=reference_rowwise,
+            gain_value=gain_value,
+        ))
+        return stats
+
+
 class L1UnstructuredGainPruner(BasePruner):
     """Magnitude pruning with survivors rescaled to matched recurrent gain."""
 
@@ -609,6 +717,10 @@ class L1UnstructuredGainPruner(BasePruner):
         from .score_controls import restore_uniform_gain
 
         reference_l1 = _offdiag_abs_sum(context.model)
+        reference_rho = _reference_spectral_radius(context.model)
+        reference_l2 = _offdiag_sq_sum(context.model)
+        reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
+        reference_rowwise = _rowwise_offdiag_l1(context.model)
         prune_l1_unstructured(
             context.model,
             context.amount,
@@ -618,6 +730,12 @@ class L1UnstructuredGainPruner(BasePruner):
             context.model,
             gain_mode=str(kwargs.get("gain_mode", "inv_density")),
             reference_offdiag_l1=reference_l1,
+            reference_spectral_radius=reference_rho,
+            reference_offdiag_l2=reference_l2,
+            reference_rho_jlin=reference_rho_jlin,
+            alpha=alpha,
+            reference_rowwise_l1=reference_rowwise,
+            gain_value=kwargs.get("gain_value"),
         )
 
 
@@ -632,6 +750,10 @@ class RandomUnstructuredGainPruner(BasePruner):
         from .score_controls import restore_uniform_gain
 
         reference_l1 = _offdiag_abs_sum(context.model)
+        reference_rho = _reference_spectral_radius(context.model)
+        reference_l2 = _offdiag_sq_sum(context.model)
+        reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
+        reference_rowwise = _rowwise_offdiag_l1(context.model)
         prune_random_unstructured(
             context.model,
             context.amount,
@@ -641,6 +763,12 @@ class RandomUnstructuredGainPruner(BasePruner):
             context.model,
             gain_mode=str(kwargs.get("gain_mode", "inv_density")),
             reference_offdiag_l1=reference_l1,
+            reference_spectral_radius=reference_rho,
+            reference_offdiag_l2=reference_l2,
+            reference_rho_jlin=reference_rho_jlin,
+            alpha=alpha,
+            reference_rowwise_l1=reference_rowwise,
+            gain_value=kwargs.get("gain_value"),
         )
 
 
@@ -656,8 +784,11 @@ register_pruner(L1UnstructuredPruner())
 register_pruner(OBSCompensatedPruner())
 register_pruner(NoisePruneShuffledRescaleStrategy())
 register_pruner(NoisePruneUniformRescaleStrategy())
+register_pruner(NoisePruneMagnitudeRescaleStrategy())
 register_pruner(SimulationNoisePruneShuffledRescaleStrategy())
 register_pruner(SimulationNoisePruneUniformRescaleStrategy())
+register_pruner(SimulationNoisePruneMagnitudeRescaleStrategy())
+register_pruner(NoisePruneGainPruner())
 register_pruner(L1UnstructuredGainPruner())
 register_pruner(RandomUnstructuredGainPruner())
 
