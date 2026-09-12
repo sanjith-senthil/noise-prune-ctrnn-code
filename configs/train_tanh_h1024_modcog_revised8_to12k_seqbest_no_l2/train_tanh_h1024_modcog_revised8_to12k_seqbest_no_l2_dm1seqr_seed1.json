@@ -1,0 +1,62 @@
+{
+  "run_id": "train_tanh_h1024_modcog_revised8_to12k_seqbest_no_l2_dm1seqr_seed1",
+  "output_csv": "results/train_tanh_h1024_modcog_revised8_to12k_seqbest_no_l2/dm1seqr_seed1.csv",
+  "defaults": {
+    "hidden_size": 1024,
+    "train_steps": 6000,
+    "ft_steps": 0,
+    "last_only": false,
+    "eval_last_only": false,
+    "device": "cpu",
+    "movement_batches": 20,
+    "model_type": "ctrnn",
+    "activation": "tanh",
+    "ng_T": 0,
+    "ng_B": 256,
+    "eval_sample_batches": 64,
+    "eval_seed": 0,
+    "reset_results": false,
+    "resume": true,
+    "lr": 0.0012,
+    "clip": 1.0,
+    "train_progress": true,
+    "train_progress_every": 100,
+    "train_select_best": true,
+    "train_val_interval": 500,
+    "train_best_metric": "acc_sequence",
+    "train_best_metric_mode": "max",
+    "train_best_tie_metric": "loss",
+    "train_best_tie_metric_mode": "min",
+    "no_self_connections": true,
+    "use_dale": false
+  },
+  "runs": [
+    {
+      "run_id": "train_modcog_dm1seqr_tanh_h1024_6k_seqbest_no_l2_seed1",
+      "train_steps": 6000,
+      "lr": 0.0012,
+      "save_model_path": "checkpoints/tanh_h1024_modcog_revised8_6k_seqbest_no_l2_seed1/modcog_dm1seqr_seed1.pt",
+      "strategy": "none",
+      "amount": 0.0,
+      "no_prune": true,
+      "seed": 1,
+      "task": "modcog:dm1seqr",
+      "ng_T": 30,
+      "recurrent_l2_lambda": 0.0
+    },
+    {
+      "run_id": "continue_modcog_dm1seqr_tanh_h1024_to12k_lr0006_seqbest_no_l2_seed1",
+      "train_steps": 6000,
+      "lr": 0.0006,
+      "load_model_path": "checkpoints/tanh_h1024_modcog_revised8_6k_seqbest_no_l2_seed1/modcog_dm1seqr_seed1.pt",
+      "save_model_path": "checkpoints/tanh_h1024_modcog_revised8_to12k_lr0006_seqbest_no_l2_seed1/modcog_dm1seqr_seed1.pt",
+      "strategy": "none",
+      "amount": 0.0,
+      "no_prune": true,
+      "seed": 1,
+      "task": "modcog:dm1seqr",
+      "ng_T": 30,
+      "recurrent_l2_lambda": 0.0
+    }
+  ]
+}
