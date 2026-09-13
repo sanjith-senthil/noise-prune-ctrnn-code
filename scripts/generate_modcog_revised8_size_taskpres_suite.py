@@ -91,8 +91,12 @@ METHODS = (
     ("lnp_mask", "vanilla_mask_only", (0,), False, False, {}),
     ("magnitude", "l1_unstructured", (0,), False, False, {}),
     ("obs_compensated", "obs_compensated", (0,), True, False, OBS_OPTIONS),
-    ("lnp_magnitude", "noise_prune_magnitude_rescale", PRUNING_SEEDS, False, True, {}),
-    ("snp_magnitude", "simulation_noise_prune_magnitude_rescale", PRUNING_SEEDS, True, True, {}),
+    # The covariance-ablation arms (lnp_magnitude / snp_magnitude) were run here
+    # once, to test whether the covariance contribution grows with N. It does
+    # not -- 0 of 8 cells, and significantly negative for L-NP at 80%. The
+    # question is answered and recorded in docs/MANUSCRIPT_REVISION_PLAN.md, so
+    # the arms are removed from the released comparison, which is the paper's
+    # seven methods. Their raw rows remain on disk under the results directory.
 )
 # Arms whose retention probabilities are replaced by a control; they take a
 # dedicated seed so the control draw is reproducible independently of the

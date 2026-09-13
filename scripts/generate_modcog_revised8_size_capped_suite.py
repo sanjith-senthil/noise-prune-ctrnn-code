@@ -23,14 +23,16 @@ Arms
                            which is what licenses comparing capped against
                            uncapped across the two suites.
 
-Known limitation carried over
------------------------------
-At H = 1024 the L-NP Lyapunov solve fails outright on ``multidlydmintseq`` and
-``dmsintseq`` (max Re(lambda) = 5.0-5.4 against a shift ladder that tops out at
-A = W - 5I). The capped variant uses the same solve, so its L-NP arms will fail
-on those two tasks too and report n = 18 rather than 24. That is expected, not a
-new defect; the summarizer must be run with --allow-missing and reports which
-cells are absent.
+Leak-shift budget
+-----------------
+The defaults are inherited from the task-preservation generator, which sets
+``noise_max_attempts = 8``. That matters here: at H = 1024 the L-NP Lyapunov
+solve needs shift 4 on six tasks and shift 8 on ``multidlydmintseq`` and
+``dmsintseq`` (max Re(lambda) = 5.0-5.4, above the threshold of 5 that the
+default budget of 5 attempts can reach). With 8 attempts all L-NP arms complete,
+verified by smoke test on multidlydmintseq -- the hardest task -- at both
+quantiles. Read ``prune_leak_shift`` when interpreting: a shift-8 run had its
+covariance computed for A = W - 9I.
 """
 
 from __future__ import annotations

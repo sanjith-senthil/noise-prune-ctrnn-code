@@ -44,8 +44,11 @@ TASKS = ("ctxdlydm2intseq", "ctxdlydm1intseq", "dlydm1intseq", "dlydm2intseq",
          "multidlydmintseq", "dm1seqr", "dm2seql", "dmsintseq")
 UNIT_NAMES = frozenset(f"{t}_p{p}.csv" for t in TASKS for p in (50, 60, 70, 80))
 ALPHA = 0.05
-ARM_ORDER = ["snp_rescale", "lnp_rescale", "snp_magnitude", "lnp_magnitude",
-             "obs_compensated", "snp_mask", "lnp_mask", "magnitude", "random"]
+# Released comparison: the paper's seven methods. The covariance-ablation arms
+# are excluded by decision (see the generator); if their rows are present the
+# covariance section below still reports them, but they do not appear here.
+ARM_ORDER = ["snp_rescale", "lnp_rescale", "obs_compensated",
+             "snp_mask", "lnp_mask", "magnitude", "random"]
 # L-NP and S-NP covariance contributions measured at H=512, for the size comparison
 H512_COVARIANCE_DELTA = {
     ("lnp", 50): 0.025, ("lnp", 60): 0.041, ("lnp", 70): 0.032, ("lnp", 80): 0.006,
