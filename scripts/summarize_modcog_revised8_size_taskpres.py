@@ -64,19 +64,28 @@ def holm(p):
     return a
 
 
-def load(h: int) -> pd.DataFrame:
+def load(h: int, allow_missing: bool = False) -> pd.DataFrame:
     d_dir = Path(f"results/{suite_stem(h)}")
     files = [f for f in sorted(d_dir.glob("*.csv")) if f.name in UNIT_NAMES]
     if not files:
         raise SystemExit(f"no per-unit CSVs in {d_dir}")
     d = pd.concat([pd.read_csv(f, low_memory=False) for f in files], ignore_index=True)
     print(f"H={h}: merged {len(files)} unit CSVs -> {len(d)} rows")
-    if d.post_acc_sequence.isna().any():
-        n = int(d.post_acc_sequence.isna().sum())
-        raise SystemExit(
-            f"{n} rows have no result. Failed runs still carry their run_id, so `resume` "
-            f"would skip them on a re-run -- delete the unit CSVs and re-run rather than "
-            f"summarizing a partial suite.")
+    empty = d[d.post_acc_sequence.isna()]
+    if len(empty):
+        by_arm = empty.run_id.str.extract(r"netseed\d+_(.+)_p\d\d_pruneseed")[0].value_counts()
+        by_task = empty.run_id.str.extract(rf"taskpres_h{h}_([a-z0-9]+)_netseed")[0].value_counts()
+        print(f"\n!! {len(empty)} runs produced no result:")
+        print("   by arm:  " + ", ".join(f"{k}={v}" for k, v in by_arm.items()))
+        print("   by task: " + ", ".join(f"{k}={v}" for k, v in by_task.items()))
+        if not allow_missing:
+            raise SystemExit(
+                "Refusing to summarize a suite with missing cells. Failed runs still carry their "
+                "run_id, so `resume` would skip them on a re-run. Either delete the affected unit "
+                "CSVs and re-run, or pass --allow-missing to summarize what completed (the missing "
+                "cells are then excluded and the affected arm reports a reduced n).")
+        print("   --allow-missing given: these cells are dropped; affected arms report reduced n.")
+        d = d[d.post_acc_sequence.notna()].copy()
     base = d[d.strategy == "none"].set_index("source_model_label")["post_acc_sequence"]
     p = d[d.strategy != "none"].copy()
     p["baseline_acc_sequence"] = p["source_model_label"].map(base)
@@ -94,9 +103,12 @@ def load(h: int) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hidden-size", type=int, default=1024)
+    ap.add_argument("--allow-missing", action="store_true",
+                    help="summarize despite failed cells; they are dropped and the affected "
+                         "arm reports a reduced n, which is stated in the output")
     args = ap.parse_args()
     h = args.hidden_size
-    p = load(h)
+    p = load(h, allow_missing=args.allow_missing)
     out = Path(f"results/{suite_stem(h)}")
     p.to_csv(out / f"{suite_stem(h)}_raw.csv", index=False)
 

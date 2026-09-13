@@ -134,6 +134,17 @@ def defaults_block(h: int) -> dict:
         "eval_steps_post0": 100, "eval_steps_post": 100,
         "noise_sigma": 1.0, "noise_eps": 0.3, "noise_leak_shift": 0.0,
         "noise_matched_diagonal": False,
+        # Larger networks need more rungs of the Lyapunov leak-shift ladder
+        # (0 -> 0.5 -> 1 -> 2 -> 4 -> 8 -> ...). At H=1024 every L-NP run
+        # already lands on shift 4, the last rung the default budget of 5
+        # reaches, and multidlydmintseq / dmsintseq exceed it outright
+        # (max Re(lambda) = 5.0-5.4 against a threshold of 5). 8 attempts
+        # reaches shift 8 and completes them. The default of 5 is unchanged
+        # elsewhere, so no frozen H=512 result moves -- the loop breaks on
+        # first success, so extra rungs only affect runs that previously
+        # raised. Read prune_leak_shift when interpreting: a run at shift 8
+        # had its covariance computed for A = W - 9I.
+        "noise_max_attempts": 8,
         "sim_np_sigma": None, "sim_np_sigma_source": "natural_voltage",
         "sim_np_observable_space": "rate", "sim_np_inject_space": "rate",
         "sim_np_centering": "trajectory_mean", "sim_np_max_samples": 25000,

@@ -192,6 +192,29 @@ NOISE_PARAMETER_STRATEGIES = frozenset({
 }) | SIMULATION_NOISE_STRATEGIES
 
 
+# Strategies whose pruning path is noise_prune_recurrent, and which therefore
+# accept `max_attempts` for the Lyapunov leak-shift retry ladder.
+LYAPUNOV_RETRY_STRATEGIES = frozenset({
+    "noise_prune",
+    "noise_prune_capped_rescale",
+    "noise_prune_shuffled_rescale",
+    "noise_prune_uniform_rescale",
+    "noise_prune_magnitude_rescale",
+    "noise_prune_gain",
+})
+
+
+def _assert_lyapunov_retry_signature() -> None:
+    """Fail loudly if a gated strategy's pruning function lacks max_attempts."""
+    import inspect
+    from pruning_benchmark.pruning.strategies import noise_prune_recurrent
+
+    if "max_attempts" not in inspect.signature(noise_prune_recurrent).parameters:
+        raise RuntimeError(
+            "noise_prune_recurrent no longer accepts max_attempts; "
+            "LYAPUNOV_RETRY_STRATEGIES would pass an unsupported kwarg.")
+
+
 def _assert_noise_strategies_registered() -> None:
     """Fail loudly if a registered stochastic noise-prune strategy is ungated.
 
@@ -217,11 +240,26 @@ def _assert_noise_strategies_registered() -> None:
 def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     prune_kwargs: Dict[str, Any] = {}
     prune_meta: Dict[str, Any] = {}
+    # Popped unconditionally: a suite may set this in `defaults`, which merges
+    # into EVERY run, and any key left unconsumed kills the run with
+    # "Unsupported keyword arguments". Consumed below only for the strategies
+    # that actually accept it.
+    max_attempts = int(options.pop("noise_max_attempts", 5))
     if strategy in NOISE_PARAMETER_STRATEGIES:
         sigma = float(options.pop("noise_sigma", 1.0))
         eps = float(options.pop("noise_eps", 0.3))
         leak_shift = float(options.pop("noise_leak_shift", 0.0))
         matched_diagonal = bool(options.pop("noise_matched_diagonal", True))
+        # Retry budget for the Lyapunov solve's leak-shift ladder
+        # (0 -> 0.5 -> 1 -> 2 -> 4 -> 8 -> ...). Default 5 preserves the
+        # behaviour every frozen H=512 result was produced under; raising it
+        # only affects runs that would otherwise have RAISED, since the loop
+        # breaks on first success. Larger networks need more rungs: at H=1024
+        # every run already lands on the last one (shift 4), and two tasks
+        # exceed it outright. Note the interpretive cost -- a larger shift means
+        # the covariance is computed for an operator with correspondingly more
+        # leak than the network actually has, so read prune_leak_shift when
+        # interpreting any run that needed a high rung.
         rng_seed = options.pop("noise_rng_seed", None)
         prune_kwargs.update({
             "sigma": sigma,
@@ -229,6 +267,14 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             "leak_shift": leak_shift,
             "matched_diagonal": matched_diagonal,
         })
+        # ONLY the strategies that route through noise_prune_recurrent accept
+        # max_attempts. The simulation family has no such parameter and
+        # vanilla_mask_only carries its own (default 6, which is why it
+        # survives at H=1024 where noise_prune's 5 does not). Passing it more
+        # widely would fail every other arm with "Unsupported keyword
+        # arguments", the same way obs_damping in `defaults` once did.
+        if strategy in LYAPUNOV_RETRY_STRATEGIES:
+            prune_kwargs["max_attempts"] = max_attempts
         prune_meta.update(prune_kwargs)
         if rng_seed is not None:
             rng_seed = int(rng_seed)
@@ -1320,6 +1366,7 @@ def run_prune_experiment(
     if strategy in NOISE_PARAMETER_STRATEGIES:
         config_metadata.update({
             "noise_sigma": prune_meta.get("sigma"),
+            "noise_max_attempts": prune_meta.get("max_attempts"),
             "noise_eps": prune_meta.get("eps"),
             "noise_leak_shift": prune_meta.get("leak_shift"),
             "noise_matched_diagonal": prune_meta.get("matched_diagonal"),

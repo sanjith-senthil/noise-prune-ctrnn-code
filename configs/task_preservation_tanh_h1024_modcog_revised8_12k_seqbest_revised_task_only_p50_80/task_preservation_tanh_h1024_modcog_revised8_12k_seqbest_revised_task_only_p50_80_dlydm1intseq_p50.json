@@ -25,6 +25,7 @@
     "noise_eps": 0.3,
     "noise_leak_shift": 0.0,
     "noise_matched_diagonal": false,
+    "noise_max_attempts": 8,
     "sim_np_sigma": null,
     "sim_np_sigma_source": "natural_voltage",
     "sim_np_observable_space": "rate",
