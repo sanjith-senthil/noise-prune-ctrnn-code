@@ -12,6 +12,7 @@ from torch.nn.utils import prune
 from .pruners import BasePruner, PruneContext
 from .score_controls import apply_probability_control
 from .simulation_noise_prune import (
+    _accumulate_covariance,
     _as_numpy_batches,
     _collect_centered_samples,
     _empirical_covariance,
@@ -35,12 +36,14 @@ def simulation_noise_prune_rescale_recurrent(
     inject_space: str = "rate",
     centering: str = "trajectory_mean",
     max_samples: int = 25_000,
+    num_rollouts: int | None = None,
     burn_in_steps: int = 300,
     rng_seed: int | None = None,
     rescale_cap: float | None = None,
     rescale_cap_quantile: float | None = None,
     prob_control: str = "none",
     prob_control_seed: int | None = None,
+    prob_normalize: str = "clip",
     zero_task_input: bool = False,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
@@ -76,18 +79,34 @@ def simulation_noise_prune_rescale_recurrent(
     sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source, sigma_factor=sigma_factor)
     if zero_task_input:
         batch_arrays = [np.zeros_like(b) for b in batch_arrays]
-    X, sim_stats = _collect_centered_samples(
-        net,
-        batch_arrays,
-        observable_space=observable_space,
-        inject_space=inject_space,
-        centering=centering,
-        noise_scale=sigma_used,
-        max_samples=int(max_samples),
-        burn_in_steps=int(burn_in_steps),
-        rng=rng,
-    )
-    C_emp = _empirical_covariance(X, center_assumed=True)
+    if num_rollouts is None:
+        X, sim_stats = _collect_centered_samples(
+            net,
+            batch_arrays,
+            observable_space=observable_space,
+            inject_space=inject_space,
+            centering=centering,
+            noise_scale=sigma_used,
+            max_samples=int(max_samples),
+            burn_in_steps=int(burn_in_steps),
+            rng=rng,
+        )
+        C_emp = _empirical_covariance(X, center_assumed=True)
+    else:
+        # Fixed rollout budget instead of a fixed sample cap, so that windows of
+        # different length are compared at matched simulation cost rather than
+        # at matched (and, for a whole-trial window, far fewer) rollouts.
+        C_emp, sim_stats = _accumulate_covariance(
+            net,
+            batch_arrays,
+            observable_space=observable_space,
+            inject_space=inject_space,
+            centering=centering,
+            noise_scale=sigma_used,
+            num_rollouts=int(num_rollouts),
+            burn_in_steps=int(burn_in_steps),
+            rng=rng,
+        )
     empirical_mean_gain = np.asarray(json.loads(natural["empirical_mean_gain_json"]), dtype=np.float64)
     score_weights = net.wrec
     if observable_space == "voltage":
@@ -98,6 +117,7 @@ def simulation_noise_prune_rescale_recurrent(
         sigma=float(sigma_used),
         eps=float(eps),
         target_density=float(1.0 - amount),
+        normalize=str(prob_normalize),
     )
 
     off_mask = ~np.eye(net.wrec.shape[0], dtype=bool)
@@ -169,6 +189,9 @@ def simulation_noise_prune_rescale_recurrent(
         "target_density": float(1.0 - amount),
         "enforced_density": float(mask.sum().item()) / float(mask.numel()),
         "burn_in_steps": int(burn_in_steps),
+        "num_rollouts_requested": int(num_rollouts) if num_rollouts is not None else 0,
+        "prob_normalize_mode": str(prob_normalize),
+        "cov_budget_mode": "rollouts" if num_rollouts is not None else "samples",
         "empirical_cov_trace": float(np.trace(C_emp)),
         "empirical_cov_diag_mean": float(np.mean(np.diag(C_emp))),
         "u_shape_json": json.dumps([list(x.shape) for x in batch_arrays]),
@@ -222,12 +245,15 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
             inject_space=str(kwargs.get("inject_space", "rate")),
             centering=str(kwargs.get("centering", "trajectory_mean")),
             max_samples=int(kwargs.get("max_samples", 25_000)),
+            num_rollouts=(None if kwargs.get("num_rollouts") is None
+                          else int(kwargs["num_rollouts"])),
             burn_in_steps=int(kwargs.get("burn_in_steps", 300)),
             rng_seed=kwargs.get("rng_seed"),
             rescale_cap=kwargs.get("rescale_cap"),
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
+            prob_normalize=str(kwargs.get("prob_normalize", "clip")),
             zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )
@@ -259,12 +285,15 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
             inject_space=str(kwargs.get("inject_space", "rate")),
             centering=str(kwargs.get("centering", "trajectory_mean")),
             max_samples=int(kwargs.get("max_samples", 25_000)),
+            num_rollouts=(None if kwargs.get("num_rollouts") is None
+                          else int(kwargs["num_rollouts"])),
             burn_in_steps=int(kwargs.get("burn_in_steps", 300)),
             rng_seed=kwargs.get("rng_seed"),
             rescale_cap=kwargs.get("rescale_cap"),
             rescale_cap_quantile=kwargs.get("rescale_cap_quantile"),
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
+            prob_normalize=str(kwargs.get("prob_normalize", "clip")),
             zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )

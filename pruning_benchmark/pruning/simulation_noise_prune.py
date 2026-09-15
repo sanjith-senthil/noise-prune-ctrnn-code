@@ -395,6 +395,85 @@ def _collect_centered_samples(
     }
 
 
+def _accumulate_covariance(
+    net: _ExtractedCTRNN,
+    batches: Sequence[np.ndarray],
+    *,
+    observable_space: str,
+    inject_space: str,
+    centering: str,
+    noise_scale: float,
+    num_rollouts: int,
+    burn_in_steps: int,
+    rng: np.random.Generator,
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Empirical covariance at a fixed *rollout* budget.
+
+    The sample-capped path (``_collect_centered_samples``) ties the number of
+    rollouts to the retained window.  At the paper's burn-in the window is a
+    single timestep, so the 25,000-sample cap costs 98 rollouts; a whole-trial
+    window reaches the same cap in 3, and would see only 3 of the 20 frozen
+    score batches.  Comparing windows under a sample cap therefore confounds
+    *what* is measured with *how many* independent noise realisations went into
+    it.  This path fixes the rollouts instead and lets the sample count follow,
+    so window variants are compared at matched simulation cost.
+
+    Covariance accumulates as a running sum of outer products, so peak memory is
+    one rollout's trajectory regardless of the window.  The per-rollout centering
+    convention matches ``_collect_centered_samples`` exactly: ``trajectory_mean``
+    subtracts each rollout's own window mean, ``conditional`` subtracts the
+    matched noise-free reference sample by sample.
+    """
+    if observable_space not in {"rate", "voltage"}:
+        raise ValueError("observable_space must be 'rate' or 'voltage'.")
+    if inject_space not in {"rate", "voltage"}:
+        raise ValueError("inject_space must be 'rate' or 'voltage'.")
+    if centering not in {"trajectory_mean", "conditional"}:
+        raise ValueError("centering must be 'trajectory_mean' or 'conditional'.")
+    if int(num_rollouts) < 1:
+        raise ValueError("num_rollouts must be >= 1.")
+
+    # The noise-free reference is recomputed per rollout rather than cached for
+    # every batch: caching costs (n_batches x T x B x H) floats -- 839 MB at
+    # T = 40, B = 256, H = 512 -- per worker, which is what drove twelve
+    # concurrent workers into tens of GB of resident memory. A noise-free
+    # rollout is ~0.7% of the cost of the noisy rollout plus its outer-product
+    # accumulation, so recomputing is far cheaper than holding it.
+    H = net.wrec.shape[0]
+    scatter = np.zeros((H, H), dtype=np.float64)
+    total = 0
+    window_steps = 0
+    for index in range(int(num_rollouts)):
+        xb = batches[index % len(batches)]
+        fr_seq, v_seq = _rollout_noisy(
+            net,
+            xb,
+            inject_space=inject_space,
+            noise_scale=noise_scale,
+            rng=rng,
+        )
+        obs = fr_seq if observable_space == "rate" else v_seq
+        start = min(max(0, int(burn_in_steps)), obs.shape[0] - 1)
+        window_steps = obs.shape[0] - start
+        if centering == "trajectory_mean":
+            flat = _flatten_samples(obs[start:])
+            centered = flat - np.mean(flat, axis=0, keepdims=True)
+        else:
+            fr_ref, v_ref = _rollout_noise_free(net, xb)
+            ref = fr_ref if observable_space == "rate" else v_ref
+            centered = _flatten_samples((obs - ref)[start:])
+        scatter += centered.T @ centered
+        total += centered.shape[0]
+    if total < 2:
+        raise ValueError("Need at least two samples to estimate covariance.")
+    return scatter / float(total - 1), {
+        "sample_count": int(total),
+        "num_rollouts": int(num_rollouts),
+        "burn_in_steps": int(burn_in_steps),
+        "window_steps": int(window_steps),
+    }
+
+
 def _validate_empirical_covariance(C: np.ndarray, tol: float = 1e-8) -> None:
     if C.ndim != 2 or C.shape[0] != C.shape[1]:
         raise ValueError(f"Covariance must be square, got {C.shape}.")
@@ -407,6 +486,50 @@ def _validate_empirical_covariance(C: np.ndarray, tol: float = 1e-8) -> None:
         raise ValueError("Empirical covariance has significantly negative eigenvalues.")
 
 
+def _waterfill_to_target(raw: np.ndarray, target: float) -> Tuple[np.ndarray, int]:
+    """Scale ``raw`` into probabilities with ``sum(p) == target`` and ``p <= 1``.
+
+    Plain proportional scaling followed by a clip silently loses the mass of
+    every entry pushed above 1, so the expected retained density falls below the
+    target -- and it falls *further* the more structured the score vector is,
+    because structure means a heavier tail. That biases any comparison between
+    covariance estimators directly against the more informative ones. Measured
+    on dm1seqr at 60% sparsity, the published estimator lands 2.2% below its
+    edge budget while the rate-inject/voltage-observe estimator lands 23.7%
+    below it, i.e. is really pruned to 69.5% while nominally at 60%.
+
+    Water-filling instead pins each over-1 entry at 1 and redistributes its
+    excess over the entries still below 1, in proportion to their raw scores.
+    The free set stays proportional to ``raw`` throughout (it is only ever
+    multiplied by a common factor), and each pass pins at least one more entry,
+    so the loop terminates. Mirrors ``score_controls._magnitude_proportional_probs``.
+
+    Returns the probability vector and the number of entries pinned at 1.
+    """
+    w = np.asarray(raw, dtype=np.float64).ravel()
+    total = float(w.sum())
+    if target <= 0.0 or total <= 0.0:
+        return np.zeros_like(w), 0
+    if target >= float(w.size):
+        return np.ones_like(w), int(w.size)
+
+    out = w * (target / total)
+    pinned = np.zeros(out.shape, dtype=bool)
+    for _ in range(64):
+        newly = (out > 1.0) & ~pinned
+        if not newly.any():
+            break
+        pinned |= newly
+        excess = float(out[pinned].sum() - float(pinned.sum()))
+        out[pinned] = 1.0
+        free = ~pinned & (w > 0.0)
+        free_mass = float(w[free].sum())
+        if excess <= 0.0 or not free.any() or free_mass <= 0.0:
+            break
+        out[free] += excess * w[free] / free_mass
+    return np.clip(out, 0.0, 1.0), int(pinned.sum())
+
+
 def empirical_noise_prune_scores(
     weight_matrix: np.ndarray,
     covariance: np.ndarray,
@@ -414,7 +537,10 @@ def empirical_noise_prune_scores(
     sigma: float,
     eps: float,
     target_density: float,
+    normalize: str = "clip",
 ) -> Tuple[np.ndarray, Dict[str, float]]:
+    if normalize not in {"clip", "waterfill"}:
+        raise ValueError("normalize must be 'clip' or 'waterfill'.")
     if sigma <= 0.0:
         raise ValueError("sigma must be positive.")
     if eps <= 0.0:
@@ -455,18 +581,34 @@ def empirical_noise_prune_scores(
     num_available = raw_probs.size
     sum_raw = raw_probs.sum()
     scale_factor = 1.0
-    if num_available > 0 and sum_raw > 0.0:
-        desired_kept_total = target_density * total_edges
-        scale_factor = 0.0 if desired_kept_total == 0.0 else desired_kept_total / sum_raw
-        raw_probs = raw_probs * scale_factor
-    capped_probs = int(np.count_nonzero(raw_probs > 1.0))
-    probs = np.clip(raw_probs, 0.0, 1.0)
+    desired_kept_total = target_density * total_edges
+    pinned_at_one = 0
+    if normalize == "waterfill":
+        # Hold the expected retained density exactly instead of letting the clip
+        # eat it; `scale_factor` is reported as the first-pass factor so it stays
+        # comparable with the legacy path.
+        if num_available > 0 and sum_raw > 0.0:
+            scale_factor = 0.0 if desired_kept_total == 0.0 else desired_kept_total / sum_raw
+            probs, pinned_at_one = _waterfill_to_target(raw_probs, desired_kept_total)
+        else:
+            probs = np.zeros_like(raw_probs)
+        capped_probs = int(pinned_at_one)
+    else:
+        if num_available > 0 and sum_raw > 0.0:
+            scale_factor = 0.0 if desired_kept_total == 0.0 else desired_kept_total / sum_raw
+            raw_probs = raw_probs * scale_factor
+        capped_probs = int(np.count_nonzero(raw_probs > 1.0))
+        probs = np.clip(raw_probs, 0.0, 1.0)
 
     score_mat = np.zeros_like(W, dtype=np.float64)
     score_mat[rows, cols] = probs
     return score_mat, {
         "K": float(K),
         "Kdeg": float(Kdeg),
+        "prob_normalize": normalize,
+        "prob_target_sum": float(desired_kept_total),
+        "prob_sum_shortfall": float(desired_kept_total - float(np.sum(probs))),
+        "prob_pinned_at_one": int(pinned_at_one),
         "scale_factor": float(scale_factor),
         "capped_probs": int(capped_probs),
         "score_sum": float(np.sum(probs)),
@@ -489,26 +631,41 @@ def simulation_noise_prune_mask(
     inject_space: str = "rate",
     centering: str = "trajectory_mean",
     max_samples: int = 25_000,
+    num_rollouts: Optional[int] = None,
     burn_in_steps: int = 300,
     rng_seed: Optional[int] = None,
+    prob_normalize: str = "clip",
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     net = _extract_ctrnn(model)
     batch_arrays = _as_numpy_batches(batches)
     natural = _natural_variability_stats(net, batch_arrays, burn_in_steps=int(burn_in_steps))
     sigma_used = _resolve_noise_scale(natural, sigma=sigma, sigma_source=sigma_source, sigma_factor=sigma_factor)
     rng = np.random.default_rng(rng_seed)
-    X, sim_stats = _collect_centered_samples(
-        net,
-        batch_arrays,
-        observable_space=observable_space,
-        inject_space=inject_space,
-        centering=centering,
-        noise_scale=sigma_used,
-        max_samples=int(max_samples),
-        burn_in_steps=int(burn_in_steps),
-        rng=rng,
-    )
-    C_emp = _empirical_covariance(X, center_assumed=True)
+    if num_rollouts is None:
+        X, sim_stats = _collect_centered_samples(
+            net,
+            batch_arrays,
+            observable_space=observable_space,
+            inject_space=inject_space,
+            centering=centering,
+            noise_scale=sigma_used,
+            max_samples=int(max_samples),
+            burn_in_steps=int(burn_in_steps),
+            rng=rng,
+        )
+        C_emp = _empirical_covariance(X, center_assumed=True)
+    else:
+        C_emp, sim_stats = _accumulate_covariance(
+            net,
+            batch_arrays,
+            observable_space=observable_space,
+            inject_space=inject_space,
+            centering=centering,
+            noise_scale=sigma_used,
+            num_rollouts=int(num_rollouts),
+            burn_in_steps=int(burn_in_steps),
+            rng=rng,
+        )
     empirical_mean_gain = np.asarray(json.loads(natural["empirical_mean_gain_json"]), dtype=np.float64)
     score_weights = net.wrec
     if observable_space == "voltage":
@@ -521,8 +678,13 @@ def simulation_noise_prune_mask(
         sigma=float(sigma_used),
         eps=float(eps),
         target_density=float(1.0 - amount),
+        normalize=str(prob_normalize),
     )
-    # score_mat already contains clipped non-negative probabilities.
+    # score_mat already contains clipped non-negative probabilities. The
+    # deterministic top-k is unaffected by which normaliser produced them: both
+    # are monotone in the raw score below 1, and the entries pinned at 1 (at
+    # most 39k here) never exceed the keep budget at 50-70% sparsity, so the
+    # ties they create never reach the cut.
     scored = score_mat
     if net.no_self_connections:
         np.fill_diagonal(scored, 0.0)
@@ -545,6 +707,9 @@ def simulation_noise_prune_mask(
         "amount": float(amount),
         "target_density": float(1.0 - amount),
         "burn_in_steps": int(burn_in_steps),
+        "num_rollouts_requested": int(num_rollouts) if num_rollouts is not None else 0,
+        "cov_budget_mode": "rollouts" if num_rollouts is not None else "samples",
+        "prob_normalize_mode": str(prob_normalize),
         "candidate_rec_abs_mean": float(np.mean(np.abs(net.wrec * keep_mask))),
         "score_rec_abs_mean": float(np.mean(scored)),
         "empirical_cov_trace": float(np.trace(C_emp)),
@@ -567,8 +732,10 @@ def simulation_noise_prune_recurrent(
     inject_space: str = "rate",
     centering: str = "trajectory_mean",
     max_samples: int = 25_000,
+    num_rollouts: Optional[int] = None,
     burn_in_steps: int = 300,
     rng_seed: Optional[int] = None,
+    prob_normalize: str = "clip",
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
     if include_feedforward:
@@ -585,8 +752,10 @@ def simulation_noise_prune_recurrent(
         inject_space=inject_space,
         centering=centering,
         max_samples=max_samples,
+        num_rollouts=num_rollouts,
         burn_in_steps=burn_in_steps,
         rng_seed=rng_seed,
+        prob_normalize=prob_normalize,
     )
     mask_stats = _apply_keep_mask_to_model(model, keep_mask)
     stats.update(mask_stats)
@@ -681,8 +850,11 @@ class SimulationNoisePruneStrategy(BasePruner):
             inject_space=str(kwargs.get("inject_space", "rate")),
             centering=str(kwargs.get("centering", "trajectory_mean")),
             max_samples=int(kwargs.get("max_samples", 25_000)),
+            num_rollouts=(None if kwargs.get("num_rollouts") is None
+                          else int(kwargs["num_rollouts"])),
             burn_in_steps=int(kwargs.get("burn_in_steps", 300)),
             rng_seed=kwargs.get("rng_seed"),
+            prob_normalize=str(kwargs.get("prob_normalize", "clip")),
             include_feedforward=context.prune_feedforward,
         )
 

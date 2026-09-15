@@ -191,6 +191,26 @@ NOISE_PARAMETER_STRATEGIES = frozenset({
     "vanilla_mask_only",
 }) | SIMULATION_NOISE_STRATEGIES
 
+# Every `sim_np_*` option the simulation family consumes. Strategies outside the
+# family must strip ALL of them or the runner rejects the run with "Unsupported
+# keyword arguments" -- the failure mode that `obs_damping` in `defaults` caused
+# across 1,674 H=1024 runs. Keeping one named tuple means a new option cannot be
+# added to the consumer without also being stripped from the non-consumers.
+# `sim_np_zero_task_input` was previously missing from both strip lists.
+SIM_NP_OPTION_KEYS = (
+    "sim_np_sigma",
+    "sim_np_sigma_source",
+    "sim_np_sigma_factor",
+    "sim_np_observable_space",
+    "sim_np_inject_space",
+    "sim_np_centering",
+    "sim_np_max_samples",
+    "sim_np_num_rollouts",
+    "sim_np_prob_normalize",
+    "sim_np_burn_in_steps",
+    "sim_np_zero_task_input",
+)
+
 
 # Strategies whose pruning path is noise_prune_recurrent, and which therefore
 # accept `max_attempts` for the Lyapunov leak-shift retry ladder.
@@ -290,6 +310,11 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             prune_kwargs["zero_task_input"] = zero_task_input
             prune_meta["sim_np_zero_task_input"] = zero_task_input
             max_samples = int(options.pop("sim_np_max_samples", 25_000))
+            num_rollouts_raw = options.pop("sim_np_num_rollouts", None)
+            num_rollouts = None if num_rollouts_raw in (None, "", 0) else int(num_rollouts_raw)
+            prob_normalize = str(options.pop("sim_np_prob_normalize", "clip"))
+            prune_kwargs["prob_normalize"] = prob_normalize
+            prune_meta["sim_np_prob_normalize"] = prob_normalize
             burn_in_steps = int(options.pop("sim_np_burn_in_steps", 300))
             manual_sigma = options.pop("sim_np_sigma", None)
             # Simulation-based noise-prune defaults to empirical sigma matching;
@@ -308,6 +333,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
                 "inject_space": inject_space,
                 "centering": centering,
                 "max_samples": max_samples,
+                "num_rollouts": num_rollouts,
                 "burn_in_steps": burn_in_steps,
             })
             if rng_seed is not None:
@@ -319,19 +345,11 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
                 "sim_np_inject_space": inject_space,
                 "sim_np_centering": centering,
                 "sim_np_max_samples": max_samples,
+                "sim_np_num_rollouts": num_rollouts,
                 "sim_np_burn_in_steps": burn_in_steps,
             })
         else:
-            for key in (
-                "sim_np_sigma",
-                "sim_np_sigma_source",
-                "sim_np_sigma_factor",
-                "sim_np_observable_space",
-                "sim_np_inject_space",
-                "sim_np_centering",
-                "sim_np_max_samples",
-                "sim_np_burn_in_steps",
-            ):
+            for key in SIM_NP_OPTION_KEYS:
                 options.pop(key, None)
     else:
         for key in (
@@ -340,15 +358,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             "noise_leak_shift",
             "noise_matched_diagonal",
             "noise_rng_seed",
-            "sim_np_sigma",
-            "sim_np_sigma_source",
-            "sim_np_sigma_factor",
-            "sim_np_observable_space",
-            "sim_np_inject_space",
-            "sim_np_centering",
-            "sim_np_max_samples",
-            "sim_np_burn_in_steps",
-        ):
+        ) + SIM_NP_OPTION_KEYS:
             options.pop(key, None)
     if strategy in {"noise_prune_capped_rescale", "simulation_noise_prune_capped_rescale"}:
         cap_mode = str(options.pop("rescale_cap_mode", "quantile"))
@@ -1390,6 +1400,12 @@ def run_prune_experiment(
                 "sim_np_inject_space": prune_meta.get("sim_np_inject_space"),
                 "sim_np_centering": prune_meta.get("sim_np_centering"),
                 "sim_np_max_samples": prune_meta.get("sim_np_max_samples"),
+                "sim_np_num_rollouts": prune_meta.get("sim_np_num_rollouts"),
+                "prune_sim_np_num_rollouts": prune_meta.get("sim_np_num_rollouts"),
+                "sim_np_zero_task_input": prune_meta.get("sim_np_zero_task_input"),
+                "sim_np_prob_normalize": prune_meta.get("sim_np_prob_normalize"),
+                "prune_sim_np_prob_normalize": prune_meta.get("sim_np_prob_normalize"),
+                "prune_sim_np_zero_task_input": prune_meta.get("sim_np_zero_task_input"),
                 "sim_np_burn_in_steps": prune_meta.get("sim_np_burn_in_steps"),
                 "prune_sim_np_sigma": prune_meta.get("sim_np_sigma"),
                 "prune_sim_np_sigma_source": prune_meta.get("sim_np_sigma_source"),
