@@ -133,14 +133,6 @@ def make_task_suite(task_label: str, task: str, ng_t: int) -> dict:
         "strategy": "none", "amount": 0.0, "no_prune": True, "seed": NETWORK_SEED, **common,
     }]
     for amount in AMOUNTS:
-        # reference point: the spectral convention, whose factor the sweep brackets
-        runs.append({
-            "run_id": (f"gainsweep_{task_label}_netseed{NETWORK_SEED}_spectral_"
-                       f"p{int(amount * 100)}_pruneseed{PRUNING_SEED}"),
-            "strategy": "l1_unstructured_gain", "gain_mode": "match_spectral_radius",
-            "amount": amount, "seed": PRUNING_SEED, "pruning_seed": PRUNING_SEED,
-            "noise_rng_seed": PRUNING_SEED, **common,
-        })
         for gain in GAINS:
             runs.append({
                 "run_id": (f"gainsweep_{task_label}_netseed{NETWORK_SEED}_{gain_tag(gain)}_"

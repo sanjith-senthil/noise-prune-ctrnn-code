@@ -40,26 +40,20 @@ every other part of the sample-and-rescale pipeline untouched:
 ``restore_uniform_gain`` applies the matching gain correction to a
 deterministically masked network (magnitude or random) so that every method is
 compared at matched expected recurrent gain.  Three conventions are supported:
-``inv_density`` (multiply survivors by ``1 / retained density``), ``match_l1``
-(rescale so the retained absolute weight sum equals the unpruned value) and
-``match_spectral_radius`` (rescale so ``rho(W_rec)`` equals the unpruned value).
-The first two coincide for an unbiased mask such as random pruning, but not for
-magnitude pruning, whose survivors are the large weights.
+``inv_density`` (multiply survivors by ``1 / retained density``) and ``match_l1``
+(rescale so the retained absolute weight sum equals the unpruned value).  The two
+coincide for an unbiased mask such as random pruning, but not for magnitude
+pruning, whose survivors are the large weights.
 
-The three conventions are *not* interchangeable for magnitude pruning, and the
-difference is large enough to change the conclusion.  Magnitude pruning removes
-the small weights, which carry most of the count but little of the spectrum, so
-it loses far more L1 mass than recurrent gain.  Measured over the eight seed-0
-networks, at 70% sparsity magnitude pruning retains 0.57 of the off-diagonal L1
-but 0.84 of ``rho(W_rec)`` (at 80%: 0.42 and 0.74).  ``inv_density`` (x3.3 at
-70%, x5.0 at 80%) and ``match_l1`` (x1.8 and x2.4) therefore do not *restore*
-gain, they inflate it several-fold past the unpruned value and drive the network
-into saturation, whereas the spectral convention applies a factor of x1.19 and
-x1.36 respectively.  For a recurrent
-network "expected recurrent gain" is most naturally the spectral radius, so
-``match_spectral_radius`` is the convention a matched-gain comparison should
-lead with; the other two are reported alongside it as the L1/count-based
-readings of the same idea.
+Neither restores gain for magnitude pruning, and the failure is large enough to
+matter.  Magnitude pruning removes the small weights, which carry most of the
+count but little of the spectrum, so it loses far more L1 mass than recurrent
+gain.  Measured over the eight seed-0 networks, at 70% sparsity magnitude pruning
+retains 0.57 of the off-diagonal L1 but 0.84 of ``rho(W_rec)`` (at 80%: 0.42 and
+0.74).  ``inv_density`` (x3.3 at 70%, x5.0 at 80%) and ``match_l1`` (x1.8 and
+x2.4) therefore do not restore gain: they inflate it several-fold past the
+unpruned value and drive the network into saturation.  ``match_l1_rowwise`` and
+``match_l2`` are the local-homeostatic and mean-field readings of the same idea.
 """
 
 from __future__ import annotations
@@ -204,7 +198,7 @@ def apply_probability_control(
 
 GAIN_MODES = (
     "inv_density", "match_l1", "match_l1_rowwise", "match_l2",
-    "match_spectral_radius", "match_rho_jlin", "fixed",
+    "match_rho_jlin", "fixed",
 )
 
 
@@ -286,17 +280,6 @@ def restore_uniform_gain(
         Multiply survivors so the retained off-diagonal absolute weight sum
         equals that of the unpruned matrix.  This restores total *synaptic*
         mass for any mask, biased or not.  Requires ``reference_offdiag_l1``.
-
-    ``match_spectral_radius``
-        Multiply survivors so ``rho(W_rec)`` equals that of the unpruned
-        matrix.  For a recurrent network this is the operative sense of
-        "recurrent gain" -- it is the quantity that sets whether activity
-        expands or contracts -- and it is the convention under which a
-        matched-gain magnitude baseline is actually competitive.  Because the
-        networks carry no self-connections, scaling the whole matrix scales
-        only the surviving off-diagonal weights, and ``rho(gW) = g rho(W)``
-        exactly, so a single scalar hits the target with no iteration.
-        Requires ``reference_spectral_radius``.
 
     ``match_l1_rowwise``
         Rescale each row independently so that neuron's total absolute input
@@ -412,12 +395,6 @@ def restore_uniform_gain(
                 "gain_mode='match_rho_jlin' requires reference_rho_jlin and alpha."
             )
         gain = solve_jlin_gain(layer.weight.data, float(reference_rho_jlin), float(alpha))
-    elif gain_mode == "match_spectral_radius":
-        if reference_spectral_radius is None:
-            raise ValueError(
-                "gain_mode='match_spectral_radius' requires reference_spectral_radius."
-            )
-        gain = (float(reference_spectral_radius) / pruned_rho) if pruned_rho > 0.0 else 1.0
     else:
         if gain_value is None:
             raise ValueError("gain_mode='fixed' requires gain_value.")

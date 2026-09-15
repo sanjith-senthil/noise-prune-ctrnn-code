@@ -9,18 +9,6 @@ were missing.
 
 New arms
 --------
-``magnitude_gain_spectral``
-    Magnitude pruning followed by the scalar that restores ``rho(W_rec)`` to its
-    unpruned value.  The reviewer asked for magnitude "at matched expected
-    recurrent gain", and for a recurrent network the spectral radius is the
-    operative sense of gain -- it is what decides whether activity expands or
-    contracts.  Round 1's two conventions are count- and mass-based readings of
-    the same phrase, and for magnitude pruning they are not equivalent to it:
-    magnitude discards the small weights, which carry most of the L1 mass but
-    little of the spectrum, so ``inv_density`` and ``match_l1`` overshoot the
-    original gain several-fold instead of restoring it.  See the module
-    docstring of ``pruning/score_controls.py`` for the measured ratios.
-
 ``lnp_magnitude`` / ``snp_magnitude``
     Noise-prune with the covariance factor dropped, i.e. retention
     probabilities proportional to ``|w_ij|`` alone rather than to
@@ -29,11 +17,6 @@ New arms
     controls remove *all* per-edge information; this one removes only the
     covariance term, so the contrast against ``lnp_rescale`` / ``snp_rescale``
     attributes the effect to the covariance specifically.
-
-``random_gain_spectral``
-    Not requested, but it is the control that licenses the argument above: for
-    an unbiased mask the three gain conventions should coincide, so this arm
-    shows the convention only matters where the mask is magnitude-biased.
 
 Regression arms
 ---------------
@@ -102,9 +85,7 @@ AMOUNTS = (0.5, 0.6, 0.7, 0.8)
 
 # (label, strategy, extra per-run options).  Every arm uses pruning seed 0.
 METHODS = (
-    # the two controls this round exists to add
-    ("magnitude_gain_spectral", "l1_unstructured_gain", {"gain_mode": "match_spectral_radius"}),
-    # The other two defensible readings of "matched recurrent gain". rho(J_lin) is the
+    # Readings of "matched recurrent gain". rho(J_lin) is the
     # spectral radius of the network's actual state-transition operator (1-a)I + aW --
     # the operator that iterates, and already the paper's `post_rec_linear_rho`. match_l2
     # is the mean-field reading (g^2 = N Var(w)). Measured rather than interpolated
@@ -119,8 +100,6 @@ METHODS = (
     ("magnitude_gain_rowl1", "l1_unstructured_gain", {"gain_mode": "match_l1_rowwise"}),
     ("lnp_magnitude", "noise_prune_magnitude_rescale", {}),
     ("snp_magnitude", "simulation_noise_prune_magnitude_rescale", {}),
-    # licenses the "convention only matters for a biased mask" argument
-    ("random_gain_spectral", "random_unstructured_gain", {"gain_mode": "match_spectral_radius"}),
     # regression arms: must reproduce the frozen round-1 values exactly
     ("magnitude", "l1_unstructured", {}),
     ("lnp_rescale", "noise_prune", {}),

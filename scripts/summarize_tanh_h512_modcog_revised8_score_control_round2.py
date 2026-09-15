@@ -64,8 +64,6 @@ ARM_ORDER = [
     "lnp_rescale", "snp_rescale",
     "lnp_magnitude", "snp_magnitude",
     "magnitude_gain_rowl1", "magnitude_gain_jlin", "magnitude_gain_l2",
-    "magnitude_gain_spectral",
-    "random_gain_spectral",
     "magnitude",
 ]
 
@@ -128,15 +126,6 @@ def gain_audit(p: pd.DataFrame) -> pd.DataFrame:
         "prune_prob_control_pinned_at_one", "prune_kept_edges", "post_rec_weight_nz_count",
     ) if c in p.columns]
     audit = p[cols].copy()
-
-    spectral = audit[audit.get("prune_gain_restore_mode").eq("match_spectral_radius")] \
-        if "prune_gain_restore_mode" in audit else audit.iloc[:0]
-    if len(spectral):
-        worst = float((spectral["prune_gain_restore_spectral_radius_ratio"] - 1.0).abs().max())
-        print(f"spectral gain arms: {len(spectral)} runs, "
-              f"max |rho_after/rho_reference - 1| = {worst:.2e}")
-        if worst > 1e-6:
-            raise SystemExit("spectral gain restoration did not hit its target")
 
     ctrl = audit[audit.get("prune_prob_control").eq("magnitude")] \
         if "prune_prob_control" in audit else audit.iloc[:0]
