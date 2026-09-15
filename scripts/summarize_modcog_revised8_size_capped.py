@@ -129,21 +129,31 @@ def main():
     print(summ.pivot(index="arm", columns="pruning_pct", values="mean").round(3).to_string())
 
     # ---- does capping beat uncapped? paired within network -------------------
+    # L-NP has no uncapped arm in THIS suite, so borrow it from the
+    # task-preservation suite. The regression check above (uncapped S-NP
+    # reproducing to 0.000e+00) is what licenses that join.
+    ref_cells = None
+    if ref_raw.exists():
+        rr = pd.read_csv(ref_raw, low_memory=False)
+        rr = rr[rr.arm.isin(["lnp_rescale", "snp_rescale"])]
+        ref_cells = (rr.groupby(["arm", "pruning_pct", "task_short", "source_network_seed"],
+                                as_index=False).sequence_retention.mean())
+    pool = cells if ref_cells is None else pd.concat([cells, ref_cells], ignore_index=True)
+    pool = pool.drop_duplicates(["arm", "pruning_pct", "task_short", "source_network_seed"])
+
     rows = []
-    for fam, unc in (("lnp", None), ("snp", "snp_rescale")):
+    for fam, unc in (("lnp", "lnp_rescale"), ("snp", "snp_rescale")):
         for q in ("q50", "q60"):
             arm = f"{fam}_capped_{q}"
-            if unc is None:
-                continue    # L-NP uncapped lives in the other suite; compare S-NP here
-            for pct in sorted(cells.pruning_pct.unique()):
-                u = cells[cells.pruning_pct == pct].pivot_table(
+            for pct in sorted(pool.pruning_pct.unique()):
+                u = pool[pool.pruning_pct == pct].pivot_table(
                     index=["task_short", "source_network_seed"], columns="arm",
                     values="sequence_retention")
                 if arm not in u.columns or unc not in u.columns:
                     continue
                 pr = u[[arm, unc]].dropna()
                 x, y = pr[arm].to_numpy(), pr[unc].to_numpy(); d = x - y
-                rows.append(dict(family=fam.upper(), quantile=q, pruning_pct=pct, n=len(pr),
+                rows.append(dict(family=fam.upper(), cap_q=q, pruning_pct=pct, n=len(pr),
                                  capped=x.mean(), uncapped=y.mean(), delta=d.mean(),
                                  wins=int((d > 0).sum()),
                                  h512_capped=H512_CAP.get((q, pct), np.nan),
@@ -160,7 +170,7 @@ def main():
         print(f"{'fam':<5}{'q':>5}{'sp%':>5}{'capped':>9}{'uncap':>8}{'delta':>8}"
               f"{'H512 d':>9}{'wins':>7}{'holm p':>10}")
         for _, r in t.iterrows():
-            print(f"{r.family:<5}{r.quantile:>5}{r.pruning_pct:>4}%{r.capped:>9.3f}"
+            print(f"{r.family:<5}{r['cap_q']:>5}{r.pruning_pct:>4}%{r.capped:>9.3f}"
                   f"{r.uncapped:>8.3f}{r.delta:>+8.3f}{r.h512_delta:>+9.3f}"
                   f"{r.wins:>4}/{r.n}{r.holm_p:>10.3g}{' *' if r.sig else ''}")
 
