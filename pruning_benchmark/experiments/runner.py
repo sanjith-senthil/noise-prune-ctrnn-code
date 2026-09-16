@@ -180,6 +180,7 @@ SIMULATION_NOISE_STRATEGIES = frozenset({
     "simulation_noise_prune_shuffled_rescale",
     "simulation_noise_prune_uniform_rescale",
     "simulation_noise_prune_magnitude_rescale",
+    "simulation_noise_prune_capped_magnitude_rescale",
 })
 NOISE_PARAMETER_STRATEGIES = frozenset({
     "noise_prune",
@@ -364,7 +365,8 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             "noise_rng_seed",
         ) + SIM_NP_OPTION_KEYS:
             options.pop(key, None)
-    if strategy in {"noise_prune_capped_rescale", "simulation_noise_prune_capped_rescale"}:
+    if strategy in {"noise_prune_capped_rescale", "simulation_noise_prune_capped_rescale",
+                    "simulation_noise_prune_capped_magnitude_rescale"}:
         cap_mode = str(options.pop("rescale_cap_mode", "quantile"))
         cap_value_raw = options.pop("rescale_cap_value", None)
         cap_quantile_raw = options.pop("rescale_cap_quantile", 0.95)

@@ -357,7 +357,34 @@ class SimulationNoisePruneMagnitudeRescaleStrategy(SimulationNoisePruneRescaleSt
     prob_control = "magnitude"
 
 
+class SimulationNoisePruneCappedMagnitudeRescaleStrategy(SimulationNoisePruneCappedRescaleStrategy):
+    """Capped rescale with the covariance factor dropped from the probabilities.
+
+    The covariance-dropped control for the *capped* family. It exists because
+    capping is what gives the retention score first-order leverage again.
+
+    Uncapped, ``E[W_hat_ij] = w_ij`` for any score whatsoever -- the probability
+    cancels out of the expectation -- so the score can only move variance, and
+    magnitude-proportional retention already minimises that. Cap the
+    amplification at ``c`` and the cancellation fails:
+
+        E[W_hat_ij] = w_ij * min(1, p_ij * c)
+
+    which is biased low on exactly the edges whose retention probability falls
+    below ``1/c``. The score now decides *which* connections get under-restored,
+    which is a first-order job rather than a second-order one. Contrasting this
+    arm against the full score at several cap quantiles measures whether the
+    covariance term earns more as the cap tightens.
+    """
+
+    name = "simulation_noise_prune_capped_magnitude_rescale"
+    aliases = ("snp_capped_magnitude_rescale",)
+    description = "Capped S-NP rescale with covariance-free (magnitude-only) probabilities."
+    prob_control = "magnitude"
+
+
 __all__ = [
+    "SimulationNoisePruneCappedMagnitudeRescaleStrategy",
     "SimulationNoisePruneCappedRescaleStrategy",
     "SimulationNoisePruneMagnitudeRescaleStrategy",
     "SimulationNoisePruneRescaleStrategy",

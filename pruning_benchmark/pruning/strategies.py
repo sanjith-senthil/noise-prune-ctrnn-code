@@ -20,6 +20,7 @@ from .pruners import (
 )
 from .simulation_noise_prune import SimulationNoisePruneStrategy
 from .simulation_noise_prune_rescale import (
+    SimulationNoisePruneCappedMagnitudeRescaleStrategy,
     SimulationNoisePruneCappedRescaleStrategy,
     SimulationNoisePruneMagnitudeRescaleStrategy,
     SimulationNoisePruneRescaleStrategy,
@@ -788,6 +789,7 @@ register_pruner(NoisePruneMagnitudeRescaleStrategy())
 register_pruner(SimulationNoisePruneShuffledRescaleStrategy())
 register_pruner(SimulationNoisePruneUniformRescaleStrategy())
 register_pruner(SimulationNoisePruneMagnitudeRescaleStrategy())
+register_pruner(SimulationNoisePruneCappedMagnitudeRescaleStrategy())
 register_pruner(NoisePruneGainPruner())
 register_pruner(L1UnstructuredGainPruner())
 register_pruner(RandomUnstructuredGainPruner())
