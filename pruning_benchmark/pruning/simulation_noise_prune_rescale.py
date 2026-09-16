@@ -13,6 +13,8 @@ from .pruners import BasePruner, PruneContext
 from .score_controls import apply_probability_control
 from .simulation_noise_prune import (
     _accumulate_covariance,
+    injection_floor,
+    subtract_injection_floor,
     _as_numpy_batches,
     _collect_centered_samples,
     _empirical_covariance,
@@ -44,6 +46,7 @@ def simulation_noise_prune_rescale_recurrent(
     prob_control: str = "none",
     prob_control_seed: int | None = None,
     prob_normalize: str = "clip",
+    subtract_floor: bool = False,
     zero_task_input: bool = False,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
@@ -106,6 +109,17 @@ def simulation_noise_prune_rescale_recurrent(
             num_rollouts=int(num_rollouts),
             burn_in_steps=int(burn_in_steps),
             rng=rng,
+        )
+    floor_stats = {"injection_floor": 0.0, "injection_floor_share": 0.0,
+                   "injection_floor_clipped": 0}
+    if subtract_floor:
+        C_emp, floor_stats = subtract_injection_floor(
+            C_emp,
+            injection_floor(net, observable_space=observable_space,
+                            inject_space=inject_space, noise_scale=float(sigma_used),
+                            trial_steps=int(batch_arrays[0].shape[0]),
+                            window_start=min(int(burn_in_steps),
+                                             int(batch_arrays[0].shape[0]) - 1)),
         )
     empirical_mean_gain = np.asarray(json.loads(natural["empirical_mean_gain_json"]), dtype=np.float64)
     score_weights = net.wrec
@@ -191,6 +205,7 @@ def simulation_noise_prune_rescale_recurrent(
         "burn_in_steps": int(burn_in_steps),
         "num_rollouts_requested": int(num_rollouts) if num_rollouts is not None else 0,
         "prob_normalize_mode": str(prob_normalize),
+        **floor_stats,
         "cov_budget_mode": "rollouts" if num_rollouts is not None else "samples",
         "empirical_cov_trace": float(np.trace(C_emp)),
         "empirical_cov_diag_mean": float(np.mean(np.diag(C_emp))),
@@ -254,6 +269,7 @@ class SimulationNoisePruneRescaleStrategy(BasePruner):
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
             prob_normalize=str(kwargs.get("prob_normalize", "clip")),
+            subtract_floor=bool(kwargs.get("subtract_floor", False)),
             zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )
@@ -294,6 +310,7 @@ class SimulationNoisePruneCappedRescaleStrategy(BasePruner):
             prob_control=str(kwargs.get("prob_control", self.prob_control)),
             prob_control_seed=kwargs.get("prob_control_seed"),
             prob_normalize=str(kwargs.get("prob_normalize", "clip")),
+            subtract_floor=bool(kwargs.get("subtract_floor", False)),
             zero_task_input=bool(kwargs.get("zero_task_input", False)),
             include_feedforward=context.prune_feedforward,
         )

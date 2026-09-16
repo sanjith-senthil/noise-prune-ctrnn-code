@@ -207,6 +207,7 @@ SIM_NP_OPTION_KEYS = (
     "sim_np_max_samples",
     "sim_np_num_rollouts",
     "sim_np_prob_normalize",
+    "sim_np_subtract_floor",
     "sim_np_burn_in_steps",
     "sim_np_zero_task_input",
 )
@@ -315,6 +316,9 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             prob_normalize = str(options.pop("sim_np_prob_normalize", "clip"))
             prune_kwargs["prob_normalize"] = prob_normalize
             prune_meta["sim_np_prob_normalize"] = prob_normalize
+            subtract_floor = bool(options.pop("sim_np_subtract_floor", False))
+            prune_kwargs["subtract_floor"] = subtract_floor
+            prune_meta["sim_np_subtract_floor"] = subtract_floor
             burn_in_steps = int(options.pop("sim_np_burn_in_steps", 300))
             manual_sigma = options.pop("sim_np_sigma", None)
             # Simulation-based noise-prune defaults to empirical sigma matching;
@@ -1404,6 +1408,8 @@ def run_prune_experiment(
                 "prune_sim_np_num_rollouts": prune_meta.get("sim_np_num_rollouts"),
                 "sim_np_zero_task_input": prune_meta.get("sim_np_zero_task_input"),
                 "sim_np_prob_normalize": prune_meta.get("sim_np_prob_normalize"),
+                "sim_np_subtract_floor": prune_meta.get("sim_np_subtract_floor"),
+                "prune_sim_np_subtract_floor": prune_meta.get("sim_np_subtract_floor"),
                 "prune_sim_np_prob_normalize": prune_meta.get("sim_np_prob_normalize"),
                 "prune_sim_np_zero_task_input": prune_meta.get("sim_np_zero_task_input"),
                 "sim_np_burn_in_steps": prune_meta.get("sim_np_burn_in_steps"),

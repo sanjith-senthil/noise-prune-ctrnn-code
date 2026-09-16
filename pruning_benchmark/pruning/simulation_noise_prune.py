@@ -474,6 +474,116 @@ def _accumulate_covariance(
     }
 
 
+def injection_floor(
+    net: _ExtractedCTRNN,
+    *,
+    observable_space: str,
+    inject_space: str,
+    noise_scale: float,
+    trial_steps: int | None = None,
+    window_start: int = 0,
+) -> float:
+    """Variance the injected noise contributes to the observable *directly*.
+
+    The noise drawn at step ``t`` is independent of everything before it, so when
+    it enters the observed variable without passing through ``W`` it contributes
+    an exactly isotropic term to the covariance:
+
+        C_observed = C_propagated + floor * I
+
+    Only ``C_propagated`` has been through the recurrent weights, so only it
+    carries connectivity information.  The floor is not noise in the estimator --
+    it is a large, flat, perfectly-known constant, and because the score uses
+    ``C`` multiplicatively (through ``C_ii + C_jj -/+ 2 C_ij``) a constant offset
+    dilutes the informative variation rather than adding to it.  Measured on the
+    frozen score batches it is 27-84% of the covariance diagonal, and on the
+    low-sigma tasks that share is sigma-independent (0.797 -> 0.784 as sigma
+    drops 20x): in the linear regime floor and propagated response both scale as
+    sigma^2, so reducing the noise cannot improve the ratio.  Subtracting it can.
+
+    Rate noise observed in rate contributes ``sigma^2``.  Voltage noise observed
+    in voltage contributes ``alpha * sigma^2`` -- the Euler-Maruyama step adds
+    ``sqrt(alpha) * sigma * xi``.  When the injection and observation spaces
+    differ the noise reaches the observable only through ``W`` or through the
+    activation, so there is no direct term and the floor is zero.
+    """
+    sig2 = float(noise_scale) ** 2
+    if observable_space == inject_space == "rate":
+        # Exact. The rate is rebuilt from v each step and the noise is added
+        # after the activation, so fr(t) = f(v(t)) + sigma*xi(t) with xi(t)
+        # independent of everything earlier. Verified against a W = 0 rollout:
+        # measured 0.089995 against a predicted 0.090000.
+        return sig2
+    if observable_space == "voltage" and inject_space == "rate":
+        # Exact, and zero: rate noise reaches the voltage only through W.
+        # Verified against a W = 0 rollout: measured 0.000000.
+        return 0.0
+    if observable_space == inject_space == "voltage":
+        # The Euler-Maruyama step adds sqrt(alpha)*sigma*xi to v, but the leak
+        # also carries each neuron's *own* past noise forward without it passing
+        # through W, so the floor is the leak-accumulated own-noise and not the
+        # per-step injection. It is therefore window-dependent: at step t the
+        # accumulated variance is alpha*sigma^2 (1 - lam^t)/(1 - lam) with
+        # lam = (1-alpha)^2, and the retained window averages that over t.
+        # Using the per-step value alpha*sigma^2 understates it 4.5x at T = 30.
+        if trial_steps is None:
+            raise ValueError(
+                "voltage->voltage injection_floor is window-dependent; pass trial_steps."
+            )
+        alpha = float(net.alpha)
+        lam = (1.0 - alpha) ** 2
+        start = min(max(0, int(window_start)), int(trial_steps) - 1)
+        t = np.arange(start + 1, int(trial_steps) + 1, dtype=np.float64)
+        return float(alpha * sig2 / (1.0 - lam) * np.mean(1.0 - lam ** t))
+    # voltage -> rate: the own-noise floor is passed through the activation, so
+    # it is g_i^2-weighted rather than isotropic and there is no scalar for it.
+    raise ValueError(
+        "injection_floor is not available for inject_space='voltage' with "
+        "observable_space='rate': the floor is per-neuron (gain-weighted), not isotropic."
+    )
+
+
+def subtract_injection_floor(C: np.ndarray, floor: float) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Remove the direct-injection term from a covariance estimate.
+
+    Only the diagonal is touched: the floor is isotropic by construction.  A
+    diagonal entry can land slightly below zero from sampling error, which would
+    make the matrix indefinite, so entries are clipped at zero and the number
+    clipped is reported.
+    """
+    floor = float(floor)
+    if floor <= 0.0:
+        return C, {"injection_floor": 0.0, "injection_floor_share": 0.0,
+                   "injection_floor_neg_mass": 0.0, "cov_eff_rank": 0.0}
+    diag_before = float(np.mean(np.diag(C)))
+    out = np.array(C, dtype=np.float64, copy=True)
+    out[np.diag_indices_from(out)] -= floor
+
+    # The propagated covariance is PSD in expectation, but it is close to
+    # rank-deficient -- the whole point of the diagnosis is that most of the
+    # observed variance was the isotropic injection -- so sampling error leaves
+    # many eigenvalues slightly negative once the floor is removed. Project back
+    # onto the PSD cone rather than relaxing the validator, and report how much
+    # spectral mass was negative: a large value means the floor estimate and the
+    # data disagree, not merely that the estimate is noisy.
+    out = 0.5 * (out + out.T)
+    evals, evecs = np.linalg.eigh(out)
+    neg_mass = float(np.sum(np.abs(evals[evals < 0.0])) / max(np.sum(np.abs(evals)), 1e-300))
+    clipped = np.maximum(evals, 0.0)
+    out = (evecs * clipped) @ evecs.T
+    out = 0.5 * (out + out.T)
+    total = float(np.sum(clipped))
+    eff_rank = float(total ** 2 / max(float(np.sum(clipped ** 2)), 1e-300)) if total > 0 else 0.0
+    return out, {
+        "injection_floor": floor,
+        "injection_floor_share": floor / diag_before if diag_before > 0.0 else 0.0,
+        "injection_floor_neg_mass": neg_mass,
+        # participation ratio of the propagated covariance: how many dimensions
+        # the network's noise response actually occupies, out of N.
+        "cov_eff_rank": eff_rank,
+    }
+
+
 def _validate_empirical_covariance(C: np.ndarray, tol: float = 1e-8) -> None:
     if C.ndim != 2 or C.shape[0] != C.shape[1]:
         raise ValueError(f"Covariance must be square, got {C.shape}.")
@@ -635,6 +745,7 @@ def simulation_noise_prune_mask(
     burn_in_steps: int = 300,
     rng_seed: Optional[int] = None,
     prob_normalize: str = "clip",
+    subtract_floor: bool = False,
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     net = _extract_ctrnn(model)
     batch_arrays = _as_numpy_batches(batches)
@@ -665,6 +776,17 @@ def simulation_noise_prune_mask(
             num_rollouts=int(num_rollouts),
             burn_in_steps=int(burn_in_steps),
             rng=rng,
+        )
+    floor_stats = {"injection_floor": 0.0, "injection_floor_share": 0.0,
+                   "injection_floor_clipped": 0}
+    if subtract_floor:
+        C_emp, floor_stats = subtract_injection_floor(
+            C_emp,
+            injection_floor(net, observable_space=observable_space,
+                            inject_space=inject_space, noise_scale=float(sigma_used),
+                            trial_steps=int(batch_arrays[0].shape[0]),
+                            window_start=min(int(burn_in_steps),
+                                             int(batch_arrays[0].shape[0]) - 1)),
         )
     empirical_mean_gain = np.asarray(json.loads(natural["empirical_mean_gain_json"]), dtype=np.float64)
     score_weights = net.wrec
@@ -710,6 +832,7 @@ def simulation_noise_prune_mask(
         "num_rollouts_requested": int(num_rollouts) if num_rollouts is not None else 0,
         "cov_budget_mode": "rollouts" if num_rollouts is not None else "samples",
         "prob_normalize_mode": str(prob_normalize),
+        **floor_stats,
         "candidate_rec_abs_mean": float(np.mean(np.abs(net.wrec * keep_mask))),
         "score_rec_abs_mean": float(np.mean(scored)),
         "empirical_cov_trace": float(np.trace(C_emp)),
@@ -736,6 +859,7 @@ def simulation_noise_prune_recurrent(
     burn_in_steps: int = 300,
     rng_seed: Optional[int] = None,
     prob_normalize: str = "clip",
+    subtract_floor: bool = False,
     include_feedforward: bool = False,
 ) -> Dict[str, float]:
     if include_feedforward:
@@ -756,6 +880,7 @@ def simulation_noise_prune_recurrent(
         burn_in_steps=burn_in_steps,
         rng_seed=rng_seed,
         prob_normalize=prob_normalize,
+        subtract_floor=subtract_floor,
     )
     mask_stats = _apply_keep_mask_to_model(model, keep_mask)
     stats.update(mask_stats)
@@ -855,6 +980,7 @@ class SimulationNoisePruneStrategy(BasePruner):
             burn_in_steps=int(kwargs.get("burn_in_steps", 300)),
             rng_seed=kwargs.get("rng_seed"),
             prob_normalize=str(kwargs.get("prob_normalize", "clip")),
+            subtract_floor=bool(kwargs.get("subtract_floor", False)),
             include_feedforward=context.prune_feedforward,
         )
 
