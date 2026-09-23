@@ -10,9 +10,15 @@ parameter rather than a function of N. ``cap_value * density`` is constant to
 machine precision within every network (spread 6.7e-16). If that reasoning is
 right, q50-q60 should remain the useful range at H = 1024.
 
-This suite tests it directly, and the test matters more here than at H = 512:
-the amplification tail is far heavier at the larger size (``prune_inv_p_max``
-reaches 2.3e6), so capping has more to bite on.
+This suite tests it directly.
+
+CORRECTION (2026-09-22): an earlier version of this docstring claimed the
+amplification tail is far heavier at H = 1024, so that capping would have more
+to bite on. That is backwards. Mean ``prune_inv_p_mean`` is **23.6 at H = 1024
+against 38.8 at H = 512** at 50% sparsity, and the per-network maxima are
+comparable; amplification is *milder* at the larger size. Suite G confirms the
+consequence: the optimal cap quantile moves q50 -> q60 and a q30 cap, which is
+the best cap for the covariance at H = 512, is significantly harmful here.
 
 Arms
 ----

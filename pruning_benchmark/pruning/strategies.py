@@ -707,6 +707,58 @@ class NoisePruneGainPruner(NoisePruneStrategy):
         return stats
 
 
+class SimulationNoisePruneGainPruner(SimulationNoisePruneStrategy):
+    """S-NP's deterministic top-k mask, then a *uniform* gain restoration.
+
+    The arm reviewer 2's biological-plausibility objection actually points at.
+    Sample-and-rescale multiplies each survivor by its own ``1 / p_ij``, and
+    there is no obvious synaptic mechanism for a factor that depends on a
+    sampling probability. Synaptic scaling -- ``gain_mode="match_l1_rowwise"``,
+    which restores each neuron's own summed absolute input weight -- is the
+    established homeostatic rule and is *local*: row ``i``'s factor depends only
+    on the weights neuron ``i`` receives.
+
+    The same rule on a magnitude mask collapses (0.130 / 0.070 / 0.052 / 0.056 at
+    50/60/70/80%, against 0.779 for plain magnitude), because magnitude pruning
+    retains L1 mass far more poorly than it retains count or spectrum, so
+    L1-matching demands a factor well past the one that helps. Whether the same
+    holds on the noise-prune mask is a separate question, and this strategy is
+    what answers it: the mask is chosen by the noise score, and only the
+    restoration rule changes.
+
+    ``gain_mode="fixed"`` with ``gain_value=1.0`` must reproduce
+    ``simulation_noise_prune_mask_only`` exactly.
+    """
+
+    name = "simulation_noise_prune_gain"
+    aliases = ("snp_gain",)
+    description = "S-NP deterministic mask with uniform gain restoration (e.g. synaptic scaling)."
+
+    def apply(self, context: PruneContext, state: Mapping[str, object], **kwargs):
+        from .score_controls import restore_uniform_gain
+
+        reference_l1 = _offdiag_abs_sum(context.model)
+        reference_rho = _reference_spectral_radius(context.model)
+        reference_l2 = _offdiag_sq_sum(context.model)
+        reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
+        reference_rowwise = _rowwise_offdiag_l1(context.model)
+        gain_mode = str(kwargs.pop("gain_mode", "match_l1_rowwise"))
+        gain_value = kwargs.pop("gain_value", None)
+        stats = dict(super().apply(context, state, **kwargs))
+        stats.update(restore_uniform_gain(
+            context.model,
+            gain_mode=gain_mode,
+            reference_offdiag_l1=reference_l1,
+            reference_spectral_radius=reference_rho,
+            reference_offdiag_l2=reference_l2,
+            reference_rho_jlin=reference_rho_jlin,
+            alpha=alpha,
+            reference_rowwise_l1=reference_rowwise,
+            gain_value=gain_value,
+        ))
+        return stats
+
+
 class L1UnstructuredGainPruner(BasePruner):
     """Magnitude pruning with survivors rescaled to matched recurrent gain."""
 
@@ -793,6 +845,7 @@ register_pruner(SimulationNoisePruneCappedMagnitudeRescaleStrategy())
 register_pruner(NoisePruneGainPruner())
 register_pruner(L1UnstructuredGainPruner())
 register_pruner(RandomUnstructuredGainPruner())
+register_pruner(SimulationNoisePruneGainPruner())
 
 
 __all__ = [

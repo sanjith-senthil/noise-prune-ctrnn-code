@@ -175,6 +175,7 @@ def _write_training_history(path: Path, rows: List[Dict[str, Any]]) -> None:
 # makes a future omission fatal at import rather than silent at runtime.
 SIMULATION_NOISE_STRATEGIES = frozenset({
     "simulation_noise_prune_mask_only",
+    "simulation_noise_prune_gain",
     "simulation_noise_prune_rescale",
     "simulation_noise_prune_capped_rescale",
     "simulation_noise_prune_shuffled_rescale",
@@ -182,6 +183,17 @@ SIMULATION_NOISE_STRATEGIES = frozenset({
     "simulation_noise_prune_magnitude_rescale",
     "simulation_noise_prune_capped_magnitude_rescale",
 })
+# Strategies that take a uniform gain-restoration step after masking. Written
+# once, as a constant, because the same set used to be duplicated as literals
+# across this file and a strategy added to the registry but not to every literal
+# silently ran with defaults (see MANUSCRIPT_REVISION_PLAN.md, erratum E12).
+GAIN_RESTORATION_STRATEGIES = frozenset({
+    "l1_unstructured_gain",
+    "random_unstructured_gain",
+    "noise_prune_gain",
+    "simulation_noise_prune_gain",
+})
+
 NOISE_PARAMETER_STRATEGIES = frozenset({
     "noise_prune",
     "noise_prune_capped_rescale",
@@ -403,7 +415,7 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             prune_meta["prob_control_seed"] = control_seed
     else:
         options.pop("prob_control_seed", None)
-    if strategy in {"l1_unstructured_gain", "random_unstructured_gain", "noise_prune_gain"}:
+    if strategy in GAIN_RESTORATION_STRATEGIES:
         gain_mode = str(options.pop("gain_mode", "inv_density"))
         prune_kwargs["gain_mode"] = gain_mode
         prune_meta["gain_mode"] = gain_mode
