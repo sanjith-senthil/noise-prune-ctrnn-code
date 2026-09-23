@@ -52,8 +52,9 @@ gain.  Measured over the eight seed-0 networks, at 70% sparsity magnitude prunin
 retains 0.57 of the off-diagonal L1 but 0.84 of ``rho(W_rec)`` (at 80%: 0.42 and
 0.74).  ``inv_density`` (x3.3 at 70%, x5.0 at 80%) and ``match_l1`` (x1.8 and
 x2.4) therefore do not restore gain: they inflate it several-fold past the
-unpruned value and drive the network into saturation.  ``match_l1_rowwise`` and
-``match_l2`` are the local-homeostatic and mean-field readings of the same idea.
+unpruned value and drive the network into saturation.  ``match_l1_rowwise`` is the
+local-homeostatic reading of the same idea, and the only rule in this module
+whose factor a neuron could compute from its own inputs.
 """
 
 from __future__ import annotations
@@ -196,9 +197,16 @@ def apply_probability_control(
     return controlled, stats
 
 
+# Only the conventions the paper stands behind. `match_l2` (mean-field second
+# moment) and `match_rho_jlin` (spectral radius of the discrete-time transition
+# operator) were removed 2026-09-23 along with `match_spectral_radius`: none was
+# requested by a reviewer, `match_l2` and the spectral rule beat noise-prune at
+# high sparsity, and `match_rho_jlin` is incoherent as a *restoration* rule --
+# it targets a different eigenvalue than rho(W), so some networks receive a
+# factor below 1.0. Their measurements are recorded in
+# docs/MANUSCRIPT_REVISION_PLAN.md and held locally; they do not ship.
 GAIN_MODES = (
-    "inv_density", "match_l1", "match_l1_rowwise", "match_l2",
-    "match_rho_jlin", "fixed",
+    "inv_density", "match_l1", "match_l1_rowwise", "fixed",
 )
 
 
@@ -292,28 +300,10 @@ def restore_uniform_gain(
         homeostatic plasticity would have in mind.  Returns a per-row vector
         rather than a scalar; ``gain_restore_factor`` reports its mean.
 
-    ``match_l2``
-        Multiply survivors so the retained sum of squared off-diagonal weights
-        equals the unpruned value.  In mean-field RNN theory the gain parameter
-        is defined through the second moment (``g^2 = N Var(w)``), so this is
-        the mean-field reading of "matched gain".  Requires
-        ``reference_offdiag_l2``.
-
-    ``match_rho_jlin``
-        Multiply survivors so ``rho((1-alpha) I + alpha W)`` equals the unpruned
-        value -- the spectral radius of the network's actual discrete-time
-        state-transition operator rather than of the weight matrix alone.  For a
-        CTRNN this is the operative notion of recurrent gain: it is the operator
-        that iterates, and it is already the quantity the paper reports as
-        ``post_rec_linear_rho``.  Because ``alpha = dt/tau = 0.1`` here, the
-        identity term dominates and the required factor is small (x1.02 at 50%
-        sparsity to x1.08 at 80%), far below the x1.05-x1.36 that matching
-        ``rho(W)`` demands.  Requires ``reference_rho_jlin`` and ``alpha``.
-
     ``fixed``
         Multiply survivors by an externally supplied ``gain_value``.  This is
         not a matched-gain convention; it exists so a gain *sweep* can be run
-        through the same code path as the three conventions, which answers a
+        through the same code path as the matched conventions, which answers a
         question none of them can: whether matching a particular quantity is
         what helps, or whether performance simply increases with gain over the
         whole range.  ``gain_value=1.0`` is also the identity control -- it must
@@ -384,17 +374,6 @@ def restore_uniform_gain(
                 spectral_radius(restored) / float(reference_spectral_radius)
                 if reference_spectral_radius not in (None, 0.0) else 0.0),
         }
-    elif gain_mode == "match_l2":
-        if reference_offdiag_l2 is None:
-            raise ValueError("gain_mode='match_l2' requires reference_offdiag_l2.")
-        pruned_l2 = float((layer.weight.data[offdiag] ** 2).sum().item())
-        gain = ((float(reference_offdiag_l2) / pruned_l2) ** 0.5) if pruned_l2 > 0.0 else 1.0
-    elif gain_mode == "match_rho_jlin":
-        if reference_rho_jlin is None or alpha is None:
-            raise ValueError(
-                "gain_mode='match_rho_jlin' requires reference_rho_jlin and alpha."
-            )
-        gain = solve_jlin_gain(layer.weight.data, float(reference_rho_jlin), float(alpha))
     else:
         if gain_value is None:
             raise ValueError("gain_mode='fixed' requires gain_value.")
