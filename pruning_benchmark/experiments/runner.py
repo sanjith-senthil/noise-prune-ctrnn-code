@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import random
 import csv
 from contextlib import contextmanager
@@ -530,42 +531,75 @@ def fresh_model(
 
 
 def append_results_csv(results_list: Iterable[Dict[str, Any]], csv_path: str = "results.csv"):
+    """Append rows to a suite CSV, crash-atomically.
+
+    The whole file is read and rewritten on every call, because a later run can
+    introduce a column earlier rows do not have and the header has to grow. That
+    rewrite used to open ``csv_path`` with mode ``"w"``, which truncates the file
+    *immediately* and leaves it truncated for the whole serialisation. A suite
+    unit here is ~500 KB over ~300 columns and is rewritten after each of its 45
+    runs, on eight workers at once; a kernel panic inside that window destroyed
+    every completed run in the unit, not just the one in flight. Measured: a
+    panic partway through the rewrite of a 20-row file left 5 rows.
+
+    So write a sibling temp file, fsync it, and ``os.replace`` it into position.
+    Rename is atomic on POSIX, so a reader or a crash sees either the old file or
+    the new one and never a partial one. The temp name starts with a dot, so the
+    ``*.csv`` globs used throughout the analysis code do not pick up an orphan
+    left by a hard kill.
+    """
     import csv
 
     rows = list(results_list)
     if not rows:
         return
-    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    directory = os.path.dirname(csv_path) or "."
+    os.makedirs(directory, exist_ok=True)
 
     existing_rows: List[Dict[str, Any]] = []
-    existing_fields: List[str] = []
     if os.path.exists(csv_path):
         with open(csv_path, "r", newline="") as f:
             reader = csv.DictReader(f)
             existing_rows = list(reader)
-            existing_fields = reader.fieldnames or []
 
     all_rows = existing_rows + rows
     keys = sorted({k for row in all_rows for k in row.keys() if k is not None})
 
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
+    def _sanitize(row: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized = {}
+        for key in keys:
+            value = row.get(key, "")
+            if isinstance(value, (dict, list)):
+                sanitized[key] = json.dumps(value, sort_keys=True)
+            else:
+                sanitized[key] = value
+        return sanitized
 
-        def _sanitize(row: Dict[str, Any]) -> Dict[str, Any]:
-            sanitized = {}
-            for key in keys:
-                value = row.get(key, "")
-                if isinstance(value, (dict, list)):
-                    sanitized[key] = json.dumps(value, sort_keys=True)
-                else:
-                    sanitized[key] = value
-            return sanitized
-
-        for r in existing_rows:
-            writer.writerow(_sanitize(r))
-        for r in rows:
-            writer.writerow(_sanitize(r))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-results-", suffix=".csv")
+    try:
+        # mkstemp creates 0600. Restore the mode the plain open() would have
+        # produced, so a rewritten results file keeps the permissions it had and
+        # a data release does not ship owner-only CSVs.
+        if os.path.exists(csv_path):
+            os.chmod(tmp_path, os.stat(csv_path).st_mode & 0o7777)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp_path, 0o666 & ~umask)
+        with os.fdopen(fd, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+            for r in all_rows:
+                writer.writerow(_sanitize(r))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, csv_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def evaluate_on_fixed_batches(

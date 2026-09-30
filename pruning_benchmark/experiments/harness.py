@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -53,16 +54,50 @@ def run_suite_from_config(path: str) -> str:
     quick_factor = defaults.pop("train_steps_factor", None)
     eval_steps_factor = defaults.pop("eval_steps_factor", None)
 
-    # Build set of existing run_ids in CSV to support resuming
+    # Build set of existing run_ids in CSV to support resuming.
+    #
+    # A run that raised was recorded with its run_id and an `error` column, so a
+    # plain run_id scan counted it as done and never retried it. That turns a
+    # transient failure -- memory pressure on wake from sleep, a killed worker --
+    # into a permanent silent gap in the suite. Rows carrying an error are
+    # therefore treated as NOT completed, and are dropped from the file so the
+    # retry does not leave two rows sharing one run_id.
     completed_run_ids = set()
     if resume and os.path.exists(csv_path):
         import csv
 
-        with open(csv_path, "r") as fh:
+        kept_rows, kept_fields, failed = [], [], set()
+        with open(csv_path, "r", newline="") as fh:
             reader = csv.DictReader(fh)
-            if reader.fieldnames and "run_id" in reader.fieldnames:
+            kept_fields = list(reader.fieldnames or [])
+            if "run_id" in kept_fields:
                 for row in reader:
-                    completed_run_ids.add(row.get("run_id"))
+                    rid = row.get("run_id")
+                    if str(row.get("error") or "").strip():
+                        failed.add(rid)
+                        continue
+                    kept_rows.append(row)
+                    completed_run_ids.add(rid)
+        if failed:
+            print(f"[suite:{suite_id}] retrying {len(failed)} previously failed run(s)")
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(csv_path) or ".",
+                                       prefix=".tmp-resume-", suffix=".csv")
+            try:
+                os.chmod(tmp, os.stat(csv_path).st_mode & 0o7777)
+                with os.fdopen(fd, "w", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=kept_fields)
+                    w.writeheader()
+                    for row in kept_rows:
+                        w.writerow(row)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, csv_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
 
     for idx, spec in enumerate(runs, start=1):
         merged = {**defaults, **spec}
