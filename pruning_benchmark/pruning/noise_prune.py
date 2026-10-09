@@ -25,6 +25,8 @@ import numpy as np
 from numpy.typing import ArrayLike
 from scipy.linalg import LinAlgError, solve_continuous_lyapunov
 
+from .simulation_noise_prune import _bisect_to_target
+
 
 def _validate_covariance(C: np.ndarray, tol: float = 1e-8) -> None:
     """Validate that ``C`` is (numerically) symmetric positive semidefinite."""
@@ -67,6 +69,7 @@ def noise_prune(
     rescale_cap_quantile: Optional[float] = None,
     prob_control: str = "none",
     prob_control_seed: Optional[int] = None,
+    prob_normalize: str = "bisect",
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     """Prune continuous-time operator using the covariance "noise probe" rule.
 
@@ -121,6 +124,8 @@ def noise_prune(
     if rescale_cap_quantile is not None:
         if not (0.0 < rescale_cap_quantile <= 1.0):
             raise ValueError("rescale_cap_quantile must lie in (0, 1].")
+    if prob_normalize not in {"clip", "bisect"}:
+        raise ValueError("prob_normalize must be 'clip' or 'bisect'.")
 
     mat = _ensure_square_matrix(A)
     orig_dtype = mat.dtype
@@ -175,17 +180,30 @@ def noise_prune(
     num_available = raw_probs.size
     sum_raw = raw_probs.sum()
 
+    solved_k = float("nan")
     if target_density is not None and num_available > 0 and sum_raw > 0.0:
         zero_edges = max(0.0, total_edges - num_available)
         desired_kept_total = target_density * total_edges
         desired_kept_nonzero = np.clip(desired_kept_total - zero_edges, 0.0, float(num_available))
         if desired_kept_nonzero == 0.0:
             scale_factor = 0.0
+            probs = np.zeros_like(raw_probs)
         else:
             scale_factor = desired_kept_nonzero / sum_raw
-        raw_probs = raw_probs * scale_factor
-
-    probs = np.clip(raw_probs, 0.0, 1.0)
+            if prob_normalize == "bisect":
+                # Hold the EXPECTED retained count at the budget. Scaling by
+                # desired/sum and then clipping discards the mass pushed above
+                # 1, so the network keeps fewer edges than asked for; see
+                # simulation_noise_prune._bisect_to_target for the measurement.
+                probs, capped_probs, solved_k = _bisect_to_target(
+                    raw_probs, float(desired_kept_nonzero)
+                )
+            else:
+                raw_probs = raw_probs * scale_factor
+                capped_probs = int(np.count_nonzero(raw_probs > 1.0))
+                probs = np.clip(raw_probs, 0.0, 1.0)
+    else:
+        probs = np.clip(raw_probs, 0.0, 1.0)
 
     from .score_controls import apply_probability_control
 
@@ -249,6 +267,8 @@ def noise_prune(
         "kept_edges": num_kept,
         "capped_probs": int(capped_probs),
         "density": density,
+        "prob_normalize_mode": str(prob_normalize),
+        "prob_solved_k": float(solved_k),
         "scale_factor": float(scale_factor),
         "rescale_weights": bool(rescale_weights),
         "prob_sum": float(np.sum(probs)),

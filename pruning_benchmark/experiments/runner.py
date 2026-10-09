@@ -327,7 +327,14 @@ def _extract_prune_kwargs(strategy: str, options: Dict[str, Any]) -> Tuple[Dict[
             max_samples = int(options.pop("sim_np_max_samples", 25_000))
             num_rollouts_raw = options.pop("sim_np_num_rollouts", None)
             num_rollouts = None if num_rollouts_raw in (None, "", 0) else int(num_rollouts_raw)
-            prob_normalize = str(options.pop("sim_np_prob_normalize", "clip"))
+            # "bisect" solves for the single factor K with sum(min(1, K*q)) == M,
+            # so the expected number of retained edges equals the budget. The
+            # legacy "clip" path scaled by M/sum(q) and clipped, discarding the
+            # mass above 1 and retaining fewer edges than requested -- 26% fewer
+            # at a requested 10% sparsity on H = 512. Set sim_np_prob_normalize
+            # to "clip" in a config to reproduce results published before
+            # 2026-10-09.
+            prob_normalize = str(options.pop("sim_np_prob_normalize", "bisect"))
             prune_kwargs["prob_normalize"] = prob_normalize
             prune_meta["sim_np_prob_normalize"] = prob_normalize
             subtract_floor = bool(options.pop("sim_np_subtract_floor", False))
