@@ -86,6 +86,68 @@ DM1ANTI_RESULT_GLOBS = (
 MANIFEST_EXCLUDE_NAMES = {"MANIFEST.sha256", "manifest.json", ".DS_Store"}
 MANIFEST_EXCLUDE_DIRS = {".git"}
 
+# ---------------------------------------------------------------------------
+# THE RENORMALISATION RE-RUN (2026-10-10)
+#
+# The sampling rule's probability normalisation was corrected: it scaled scores
+# by K = M/sum(q) and then clipped at 1, discarding the mass above 1, so it
+# retained fewer edges than asked for -- at a requested 10% sparsity it removed
+# 33%. The six strategies that draw a Bernoulli mask were re-run over 10-80% at
+# both network sizes, and those re-runs are what every figure and every
+# statistic in the paper now reads.
+#
+# The deposit therefore has to do two things it has never done before: ship the
+# re-run, and stop shipping the rows it supersedes. The second is why this
+# script grew a --prune mode; until now it only ever added.
+# ---------------------------------------------------------------------------
+SAMPLING_STRATEGIES = (
+    "simulation_noise_prune_rescale",
+    "simulation_noise_prune_capped_rescale",
+    "simulation_noise_prune_magnitude_rescale",
+    "simulation_noise_prune_capped_magnitude_rescale",
+    "simulation_noise_prune_shuffled_rescale",
+    "simulation_noise_prune_uniform_rescale",
+)
+
+# label -> result stem. Shipped MERGED, one table per suite, matching how the
+# rest of the deposit treats raw rows.
+RENORM_SUITES = {
+    "h512_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_p10_80",
+    "h1024_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_p10_80",
+    "h1024_rest_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_rest_p10_80",
+    "capq50_h512_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capq50_p10_80",
+}
+
+# The paper's statistics, which also changed -- from Wilcoxon/Holm to a
+# hierarchical bootstrap with an exact sign-flip test.
+NEW_STATS_DIR = PROJECT / "analysis/paper_statistics"
+
+# Deposit-relative files the re-run REPLACES outright. Deliberately empty, and
+# the reasoning is worth recording because the obvious candidates are all wrong:
+#
+#   * The two big quantile-cap sweep tables are only half sampling-arm rows; the
+#     rest are L-NP. Deleting them would take valid data with them. (The --prune
+#     guard refused exactly this when it was first attempted.)
+#   * noise_necessity and noise_only ARE 100% sampling-arm rows, but they are
+#     reviewer-control ablations -- a sigma sweep and a zero-task-input
+#     condition -- that were not part of the re-run. Nothing replaces them, so
+#     deleting them would lose the controls rather than refresh them.
+#
+# "Affected by the correction" and "superseded by something better" are not the
+# same property, and only the second justifies a deletion from a deposit that is
+# already published. Everything affected-but-not-replaced is recorded in
+# SUPERSEDED.md instead.
+SUPERSEDED_WHOLE: tuple[str, ...] = ()
+
+# Statistical outputs superseded by the change of PROCEDURE, independent of the
+# data. These are Wilcoxon/Holm families the paper no longer reports.
+SUPERSEDED_STATISTICS = (
+    "results/statistics/main_task_retention_84_wilcoxon_holm_sign_tests.csv",
+    "results/statistics/paper_relevant_h512_comparison_tests.csv",
+    "results/statistics/revised_scope_task_only_significance_tests.csv",
+    "results/statistics/revised_scope_task_only_significance_means.csv",
+)
+
 
 def sha256(path: Path) -> str:
     """SHA-256 of a file, read in chunks so large checkpoints do not load into memory."""
@@ -142,7 +204,157 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
         for source in sorted(config_root.glob(pattern)):
             pairs.append((source, revision / "configs" / "dm1anti" / source.name))
 
+    # --- the renormalisation re-run, merged, plus the configs that produced it
+    renorm = deposit / "results/renormalized_2026_10"
+    staging = PROJECT / ".staging_merged"
+    for label, stem in RENORM_SUITES.items():
+        merged = merge_suite(stem, staging)
+        if merged is None:
+            print(f"  note: suite {stem} has no results yet; skipped")
+            continue
+        pairs.append((merged, renorm / f"{label}.csv"))
+        for source in sorted((config_root / stem).glob("*.json")):
+            pairs.append((source, renorm / "configs" / label / source.name))
+
+    # --- the paper's statistics under the new procedure
+    for source in sorted(NEW_STATS_DIR.glob("*.csv")):
+        pairs.append((source, deposit / "results/statistics_2026_10" / source.name))
+    for source in sorted(NEW_STATS_DIR.glob("*.py")):
+        pairs.append((source, deposit / "results/statistics_2026_10" / "code" / source.name))
+
     return [(src, dst) for src, dst in pairs if src.is_file()]
+
+
+def merge_suite(stem: str, out_dir: Path) -> Path | None:
+    """Merge a suite's per-task shards into one table, as the deposit expects.
+
+    The runner writes 64 shards per suite; the deposit ships merged tables, so
+    the two stay consistent with how every other suite here is deposited.
+    """
+    import pandas as pd
+
+    src = RESULTS / stem
+    shards = sorted(f for f in src.glob("*.csv") if "logs" not in f.parts)
+    if not shards:
+        return None
+    frames = [pd.read_csv(f, low_memory=False) for f in shards]
+    merged = pd.concat(frames, ignore_index=True)
+    dupes = int(merged.run_id.duplicated().sum()) if "run_id" in merged else 0
+    if dupes:
+        raise SystemExit(f"{stem}: {dupes} duplicate run_ids across shards; "
+                         f"refusing to deposit a table that double-counts runs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dst = out_dir / f"{stem}_merged.csv"
+    merged.to_csv(dst, index=False)
+    return dst
+
+
+def affected_fraction(path: Path) -> tuple[int, int]:
+    """(rows naming a superseded sampling arm, total rows) for one deposit CSV.
+
+    Looks in every column that could carry a method label, because the summary
+    and statistics tables use display names rather than strategy strings.
+    """
+    import pandas as pd
+
+    try:
+        cols = set(pd.read_csv(path, nrows=0).columns)
+    except Exception:
+        return (0, 0)
+    keys = [c for c in ("strategy", "arm", "method", "Method", "label",
+                        "arm_a", "arm_b", "comparison") if c in cols]
+    if not keys:
+        return (0, 0)
+    try:
+        d = pd.read_csv(path, usecols=keys, low_memory=False)
+    except Exception:
+        return (0, 0)
+    if d.empty:
+        return (0, 0)
+    hit = pd.Series(False, index=d.index)
+    for c in keys:
+        col = d[c].astype(str)
+        hit |= col.isin(SAMPLING_STRATEGIES)
+        hit |= col.str.contains(r"S-NP|snp_|fixedg38", regex=True, na=False)
+    return (int(hit.sum()), len(d))
+
+
+def audit_deposit(deposit: Path) -> dict:
+    """Classify every deposit CSV by how much of it the re-run supersedes."""
+    whole, mixed = [], []
+    for path in sorted(deposit.rglob("*.csv")):
+        aff, tot = affected_fraction(path)
+        if not aff:
+            continue
+        rel = path.relative_to(deposit).as_posix()
+        (whole if aff >= tot else mixed).append((rel, aff, tot))
+    return {"whole": whole, "mixed": mixed}
+
+
+def write_superseded_note(deposit: Path, audit: dict) -> Path:
+    """Record exactly which rows of which files predate the correction.
+
+    The mixed files cannot simply be deleted -- most of their rows describe
+    deterministic arms that never changed -- and rewriting 38 derived summary
+    tables row by row would be a far larger and more error-prone change than
+    stating plainly which rows are stale. A reader filtering any of these
+    tables to a sampling arm needs to know to use the re-run instead, so that
+    is written down rather than left to be discovered.
+    """
+    lines = [
+        "# Superseded rows",
+        "",
+        "The sampling rule's probability normalisation was corrected on 2026-10-09.",
+        "Before the fix it scaled its unnormalised scores by `K = M / sum(q)` and then",
+        "clipped them at 1, discarding the probability mass above 1, so it retained fewer",
+        "connections than requested -- at a requested 10% sparsity it removed 33% of the",
+        "recurrent weights. It now solves `sum(min(1, K q)) = M`, so the expected retained",
+        "count equals the budget.",
+        "",
+        "Six strategies draw a Bernoulli mask and were therefore affected:",
+        "",
+    ] + [f"  - `{s}`" for s in SAMPLING_STRATEGIES] + [
+        "",
+        "They were re-run over 10-80% at both network sizes. **The re-run is the data the",
+        "paper reports**, and it is deposited under `results/renormalized_2026_10/`.",
+        "",
+        "Four strategies are deterministic and were NOT affected; their numbers are",
+        "bit-identical before and after: `l1_unstructured`, `obs_compensated`,",
+        "`random_unstructured`, `simulation_noise_prune_mask_only`.",
+        "",
+        "## Files that still contain pre-correction rows",
+        "",
+        "These tables mix affected and unaffected rows, so they are kept whole rather than",
+        "rewritten. Filter out the six strategies above and take them from the re-run",
+        "instead; the remaining rows are unchanged and still valid.",
+        "",
+        "| file | pre-correction rows | total rows |",
+        "|---|---|---|",
+    ] + [f"| `{rel}` | {aff} | {tot} |" for rel, aff, tot in audit["mixed"]] + [
+        "",
+        "## Affected but NOT re-run",
+        "",
+        "These are reviewer-control ablations of the sampling rule -- a sigma sweep and a",
+        "zero-task-input condition -- that the re-run did not cover. Every row in them",
+        "predates the correction and nothing replaces them, so they are kept and labelled",
+        "rather than deleted. Read them as evidence about the OLD rule.",
+        "",
+        "  - `results/revision_2026/noise_necessity/`",
+        "  - `results/revision_2026/noise_only/`",
+        "",
+        "## Files removed",
+        "",
+    ] + ([f"  - `{p}`" for p in SUPERSEDED_WHOLE] or ["  (none -- see the note above)"]) + [
+        "",
+        "These statistical outputs are superseded by the change of PROCEDURE, not only of",
+        "data: the paper now reports a hierarchical bootstrap over tasks with an exact",
+        "sign-flip test, in place of Wilcoxon signed-rank with Holm correction. The",
+        "replacements are in `results/statistics_2026_10/`:",
+        "",
+    ] + [f"  - `{p}`" for p in SUPERSEDED_STATISTICS] + [""]
+    dst = deposit / "SUPERSEDED.md"
+    dst.write_text("\n".join(lines))
+    return dst
 
 
 def deposit_files(deposit: Path) -> Iterable[Path]:
@@ -178,11 +390,29 @@ def main() -> None:
                         help="data release staging directory to update")
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would be copied without writing anything")
+    parser.add_argument("--audit", action="store_true",
+                        help="classify every deposit CSV by how much the re-run "
+                             "supersedes, and exit without writing")
+    parser.add_argument("--prune", action="store_true",
+                        help="also REMOVE the wholly superseded files and the "
+                             "superseded statistical outputs. Off by default: this "
+                             "script has only ever added, and a deletion from a "
+                             "deposit that is already published should be deliberate.")
     args = parser.parse_args()
 
     deposit = args.deposit_dir
     if not deposit.is_dir():
         raise SystemExit(f"deposit directory not found: {deposit}")
+
+    if args.audit:
+        a = audit_deposit(deposit)
+        print(f"wholly superseded: {len(a['whole'])} files")
+        for rel, aff, tot in a["whole"]:
+            print(f"   {rel}  ({aff}/{tot} rows)")
+        print(f"\npartly superseded: {len(a['mixed'])} files")
+        for rel, aff, tot in a["mixed"]:
+            print(f"   {rel}  ({aff}/{tot} rows)")
+        return
 
     pairs = plan_copies(deposit)
     total_bytes = sum(src.stat().st_size for src, _ in pairs)
@@ -196,6 +426,33 @@ def main() -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
     print(f"staged into {deposit}")
+
+    if args.prune:
+        audit = audit_deposit(deposit)
+        whole = {rel for rel, _a, _t in audit["whole"]}
+        removed = []
+        for rel in SUPERSEDED_WHOLE:
+            path = deposit / rel
+            if not path.is_file():
+                print(f"  prune: {rel} already absent")
+                continue
+            if rel not in whole:
+                aff, tot = affected_fraction(path)
+                raise SystemExit(
+                    f"refusing to remove {rel}: only {aff} of {tot} rows are "
+                    f"superseded, so deleting it would take valid data with it")
+            path.unlink(); removed.append(rel)
+        for rel in SUPERSEDED_STATISTICS:
+            path = deposit / rel
+            if path.is_file():
+                path.unlink(); removed.append(rel)
+            else:
+                print(f"  prune: {rel} already absent")
+        print(f"removed {len(removed)} superseded files")
+        for rel in removed:
+            print(f"   - {rel}")
+        note = write_superseded_note(deposit, audit_deposit(deposit))
+        print(f"wrote {note.relative_to(deposit)}")
 
     before = 0
     manifest_path = deposit / "manifest.json"

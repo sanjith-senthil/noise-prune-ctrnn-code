@@ -206,7 +206,7 @@ def apply_probability_control(
 # factor below 1.0. Their measurements are recorded in
 # docs/MANUSCRIPT_REVISION_PLAN.md and held locally; they do not ship.
 GAIN_MODES = (
-    "inv_density", "match_l1", "match_l1_rowwise", "fixed",
+    "inv_density", "match_l1", "match_l1_rowwise", "match_l1_colwise", "fixed",
 )
 
 
@@ -269,6 +269,7 @@ def restore_uniform_gain(
     reference_rho_jlin: Optional[float] = None,
     alpha: Optional[float] = None,
     reference_rowwise_l1: Optional[torch.Tensor] = None,
+    reference_colwise_l1: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """Rescale surviving recurrent weights to restore lost recurrent gain.
 
@@ -299,6 +300,17 @@ def restore_uniform_gain(
         natural biological baseline, and the one a reviewer invoking
         homeostatic plasticity would have in mind.  Returns a per-row vector
         rather than a scalar; ``gain_restore_factor`` reports its mean.
+
+    ``match_l1_colwise``
+        The presynaptic mirror of ``match_l1_rowwise``: rescale each *column* so
+        that neuron's total absolute *outgoing* weight is restored. In this
+        model ``W[i, j]`` is the synapse from ``j`` to ``i`` (``nn.Linear``
+        computes ``fr @ W.T``, so row ``i`` is what neuron ``i`` receives), which
+        makes the row-wise rule the postsynaptic one that synaptic scaling
+        actually describes. This mode exists as its control: it is equally local
+        and equally cheap, but it is driven by the sending neuron rather than the
+        receiving one, and homeostasis is not known to work that way. Requires
+        ``reference_colwise_l1``.
 
     ``fixed``
         Multiply survivors by an externally supplied ``gain_value``.  This is
@@ -341,16 +353,19 @@ def restore_uniform_gain(
         if reference_offdiag_l1 is None:
             raise ValueError("gain_mode='match_l1' requires reference_offdiag_l1.")
         gain = (float(reference_offdiag_l1) / pruned_l1) if pruned_l1 > 0.0 else 1.0
-    elif gain_mode == "match_l1_rowwise":
+    elif gain_mode in ("match_l1_rowwise", "match_l1_colwise"):
+        rowwise = gain_mode == "match_l1_rowwise"
+        # dim=1 sums over the presynaptic index for a fixed postsynaptic neuron,
+        # i.e. what that neuron receives; dim=0 sums what it sends.
+        sum_dim, bcast = (1, 1) if rowwise else (0, 0)
         w = layer.weight.data
-        row_ref = (reference_rowwise_l1 if reference_rowwise_l1 is not None
-                   else None)
+        row_ref = reference_rowwise_l1 if rowwise else reference_colwise_l1
         if row_ref is None:
-            raise ValueError("gain_mode='match_l1_rowwise' requires reference_rowwise_l1.")
-        row_now = (w * offdiag).abs().sum(dim=1)
+            raise ValueError(f"gain_mode={gain_mode!r} requires its reference vector.")
+        row_now = (w * offdiag).abs().sum(dim=sum_dim)
         row_gain = torch.where(row_now > 0, row_ref / row_now.clamp_min(1e-30),
                                torch.ones_like(row_now))
-        w.mul_(row_gain.unsqueeze(1))
+        w.mul_(row_gain.unsqueeze(bcast))
         prune.custom_from_mask(layer, name="weight", mask=mask)
         enforce_constraints(model)
         restored = layer.weight_orig.data * layer.weight_mask.data
@@ -359,8 +374,8 @@ def restore_uniform_gain(
             "gain_restore_mode": gain_mode,
             "gain_restore_offdiag_density": float(density),
             "gain_restore_factor": float(row_gain.mean().item()),
-            "gain_restore_rowwise_gain_min": float(row_gain.min().item()),
-            "gain_restore_rowwise_gain_max": float(row_gain.max().item()),
+            "gain_restore_vector_gain_min": float(row_gain.min().item()),
+            "gain_restore_vector_gain_max": float(row_gain.max().item()),
             "gain_restore_kept_offdiag": float(kept_offdiag),
             "gain_restore_offdiag_l1_before": pruned_l1,
             "gain_restore_offdiag_l1_after": float(restored[offdiag].abs().sum().item()),

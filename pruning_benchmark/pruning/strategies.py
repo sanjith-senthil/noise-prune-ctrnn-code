@@ -594,6 +594,22 @@ def _rowwise_offdiag_l1(model: CTRNN):
 
 
 @torch.no_grad()
+def _colwise_offdiag_l1(model: CTRNN):
+    """Per-neuron total absolute off-diagonal *output* weight of an unpruned model.
+
+    The presynaptic mirror of :func:`_rowwise_offdiag_l1`. ``W[i, j]`` is the
+    synapse from ``j`` to ``i``, so summing over ``dim=0`` collects what neuron
+    ``j`` sends rather than what it receives.
+    """
+    layer = getattr(model, "hidden_layer", None)
+    if layer is None:
+        return None
+    weight = getattr(layer, "weight_orig", layer.weight).detach()
+    offdiag = ~torch.eye(weight.shape[0], dtype=torch.bool, device=weight.device)
+    return (weight * offdiag).abs().sum(dim=0).clone()
+
+
+@torch.no_grad()
 def _offdiag_sq_sum(model: CTRNN) -> float:
     """Sum of squared off-diagonal recurrent weights of an unpruned model."""
     layer = getattr(model, "hidden_layer", None)
@@ -690,6 +706,7 @@ class NoisePruneGainPruner(NoisePruneStrategy):
         reference_l2 = _offdiag_sq_sum(context.model)
         reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
         reference_rowwise = _rowwise_offdiag_l1(context.model)
+        reference_colwise = _colwise_offdiag_l1(context.model)
         gain_mode = str(kwargs.pop("gain_mode", "fixed"))
         gain_value = kwargs.pop("gain_value", None)
         stats = dict(super().apply(context, state, **kwargs))
@@ -702,6 +719,7 @@ class NoisePruneGainPruner(NoisePruneStrategy):
             reference_rho_jlin=reference_rho_jlin,
             alpha=alpha,
             reference_rowwise_l1=reference_rowwise,
+            reference_colwise_l1=reference_colwise,
             gain_value=gain_value,
         ))
         return stats
@@ -742,6 +760,7 @@ class SimulationNoisePruneGainPruner(SimulationNoisePruneStrategy):
         reference_l2 = _offdiag_sq_sum(context.model)
         reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
         reference_rowwise = _rowwise_offdiag_l1(context.model)
+        reference_colwise = _colwise_offdiag_l1(context.model)
         gain_mode = str(kwargs.pop("gain_mode", "match_l1_rowwise"))
         gain_value = kwargs.pop("gain_value", None)
         stats = dict(super().apply(context, state, **kwargs))
@@ -754,6 +773,7 @@ class SimulationNoisePruneGainPruner(SimulationNoisePruneStrategy):
             reference_rho_jlin=reference_rho_jlin,
             alpha=alpha,
             reference_rowwise_l1=reference_rowwise,
+            reference_colwise_l1=reference_colwise,
             gain_value=gain_value,
         ))
         return stats
@@ -774,6 +794,7 @@ class L1UnstructuredGainPruner(BasePruner):
         reference_l2 = _offdiag_sq_sum(context.model)
         reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
         reference_rowwise = _rowwise_offdiag_l1(context.model)
+        reference_colwise = _colwise_offdiag_l1(context.model)
         prune_l1_unstructured(
             context.model,
             context.amount,
@@ -788,6 +809,7 @@ class L1UnstructuredGainPruner(BasePruner):
             reference_rho_jlin=reference_rho_jlin,
             alpha=alpha,
             reference_rowwise_l1=reference_rowwise,
+            reference_colwise_l1=reference_colwise,
             gain_value=kwargs.get("gain_value"),
         )
 
@@ -807,6 +829,7 @@ class RandomUnstructuredGainPruner(BasePruner):
         reference_l2 = _offdiag_sq_sum(context.model)
         reference_rho_jlin, alpha = _reference_rho_jlin(context.model)
         reference_rowwise = _rowwise_offdiag_l1(context.model)
+        reference_colwise = _colwise_offdiag_l1(context.model)
         prune_random_unstructured(
             context.model,
             context.amount,
@@ -821,6 +844,7 @@ class RandomUnstructuredGainPruner(BasePruner):
             reference_rho_jlin=reference_rho_jlin,
             alpha=alpha,
             reference_rowwise_l1=reference_rowwise,
+            reference_colwise_l1=reference_colwise,
             gain_value=kwargs.get("gain_value"),
         )
 

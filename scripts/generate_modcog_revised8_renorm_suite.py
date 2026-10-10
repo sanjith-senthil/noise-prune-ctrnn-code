@@ -94,7 +94,18 @@ ARMS_512 = (
     ("snp_shuffled",   "simulation_noise_prune_shuffled_rescale", {}),
     ("snp_uniform",    "simulation_noise_prune_uniform_rescale", {}),
 )
+# The first pass ran only the plain rescale rule at H = 1024, which is what the
+# size question needed. ARM_SET="rest" runs the other three, so the size figure
+# can show every arm on one normalisation.
 ARMS_1024 = (("snp_rescale", "simulation_noise_prune_rescale", {}),)
+ARMS_1024_REST = (
+    ("snp_capped", "simulation_noise_prune_capped_rescale",
+     {"rescale_cap_mode": "fixed", "rescale_cap_value": CAP_VALUE}),
+    ("snp_magnitude", "simulation_noise_prune_magnitude_rescale", {}),
+    ("snp_capped_mag", "simulation_noise_prune_capped_magnitude_rescale",
+     {"rescale_cap_mode": "fixed", "rescale_cap_value": CAP_VALUE}),
+)
+ARM_SET = "first"          # "first" or "rest"; set by --arm-set
 
 # every arm here drives a probability control except the two plain rescales
 CONTROLLED = {
@@ -105,8 +116,21 @@ CONTROLLED = {
 }
 
 
+STEM_TAG = ""              # set by --stem-tag; keeps passes in separate stems
+
+
 def suite_stem(h: int) -> str:
-    return f"task_preservation_tanh_h{h}_modcog_revised8_12k_seqbest_renorm_p10_80"
+    """Stem for this pass.
+
+    MUST differ between passes that could produce different numbers for the
+    same run_id. The harness resumes on run_id alone, and the run_id carries
+    neither the cap value nor the arm set, so a second pass written to the same
+    stem would find every row already present, skip all of them, and leave the
+    configs on disk advertising a cap the rows were never produced with --
+    silently.
+    """
+    tag = f"_{STEM_TAG}" if STEM_TAG else ""
+    return f"task_preservation_tanh_h{h}_modcog_revised8_12k_seqbest_renorm{tag}_p10_80"
 
 
 def shard(amount: float) -> str:
@@ -114,7 +138,9 @@ def shard(amount: float) -> str:
 
 
 def arms(h: int):
-    return ARMS_512 if h == 512 else ARMS_1024
+    if h == 512:
+        return ARMS_512
+    return ARMS_1024 if ARM_SET == "first" else ARMS_1024_REST
 
 
 def common(h: int, task_label: str, ng_t: int, seed: int) -> dict:
@@ -148,6 +174,8 @@ def defaults(h: int) -> dict:
 def make_unit(h: int, task_label: str, ng_t: int, amount: float,
               include_baseline: bool) -> dict:
     runs = []
+    # only the primary pass records baselines; see the note on STEM_TAG
+    include_baseline = include_baseline and not STEM_TAG
     for seed in NETWORK_SEEDS:
         c = common(h, task_label, ng_t, seed)
         if include_baseline:
@@ -181,9 +209,30 @@ def make_unit(h: int, task_label: str, ng_t: int, amount: float,
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    global ARM_SET, CAP_VALUE, ARMS_512, ARMS_1024_REST, STEM_TAG
     ap.add_argument("--hidden-size", type=int, default=512, choices=(512, 1024))
+    ap.add_argument("--arm-set", default="first", choices=("first", "rest"),
+                    help="H=1024 only: 'first' is snp_rescale, 'rest' is the other three")
+    ap.add_argument("--cap-value", type=float, default=None,
+                    help="override the constant amplification cap")
+    ap.add_argument("--stem-tag", default="",
+                    help="suffix for the suite stem; REQUIRED for any pass after "
+                         "the first, since resume keys on run_id alone")
     args = ap.parse_args()
     h = args.hidden_size
+    ARM_SET = args.arm_set
+    STEM_TAG = args.stem_tag
+    if ARM_SET != "first" and not STEM_TAG:
+        raise SystemExit("a non-primary arm set needs --stem-tag, or it would "
+                         "write into the primary pass's stem and be skipped")
+    if args.cap_value is not None and args.cap_value != CAP_VALUE:
+        CAP_VALUE = float(args.cap_value)
+        ARMS_512 = tuple(
+            (l, s, ({**e, "rescale_cap_value": CAP_VALUE} if "rescale_cap_value" in e else e))
+            for l, s, e in ARMS_512)
+        ARMS_1024_REST = tuple(
+            (l, s, ({**e, "rescale_cap_value": CAP_VALUE} if "rescale_cap_value" in e else e))
+            for l, s, e in ARMS_1024_REST)
 
     tasks = _rs.TASKS if h == 512 else _st.TASKS
     if h == 512:
@@ -211,7 +260,9 @@ def main() -> None:
     print(f"  H = {h}; arms {[a[0] for a in arms(h)]}")
     print(f"  sparsities {[int(a * 100) for a in AMOUNTS]}; "
           f"{len(tasks)} tasks x {len(NETWORK_SEEDS)} net seeds x {len(PRUNING_SEEDS)} prune seeds")
-    print(f"  {pruned} pruned runs + {len(tasks) * len(NETWORK_SEEDS)} baselines = {total} total")
+    n_base = total - pruned
+    print(f"  {pruned} pruned runs + {n_base} baselines = {total} total"
+          + ("   (baselines live in the primary pass)" if STEM_TAG else ""))
     print(f"  normalisation: {NORMALIZE}; cap {CAP_VALUE} at every sparsity")
 
 
