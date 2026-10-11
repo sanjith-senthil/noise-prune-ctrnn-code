@@ -3,6 +3,34 @@
 This repository is the curated public code release for the paper's CTRNN
 task-preservation pruning experiments on Mod-Cog tasks.
 
+## The companion data deposit
+
+This repository is the code only. The trained networks and the result tables are
+in the data deposit:
+
+  https://github.com/sanjith-senthil/noise-prune-ctrnn-data
+
+**Every config here loads checkpoints by a path relative to the working
+directory**, for example
+`checkpoints/tanh_h512_modcog_revised8_to12k_lr0006_seqbest_no_l2_seed0/modcog_dm1seqr_seed0.pt`.
+So before running anything, place or symlink the data deposit's `checkpoints/`
+directory at the root of this repository:
+
+```bash
+git clone https://github.com/sanjith-senthil/noise-prune-ctrnn-data
+ln -s ../noise-prune-ctrnn-data/checkpoints checkpoints
+```
+
+A few summarising scripts also look for `../data_release_staging/...` as a
+sibling directory; clone the two repositories side by side if you need those.
+
+The fixed evaluation and pruning-score batches are NOT in either deposit. They
+do not need to be: the runner builds and caches them deterministically from the
+seeds recorded in every config, so the first run of a suite regenerates exactly
+the batches the published results used.
+
+Licensed under the MIT License; see LICENSE. The data deposit is CC BY 4.0.
+
 ## Scope
 
 Included pruning methods:

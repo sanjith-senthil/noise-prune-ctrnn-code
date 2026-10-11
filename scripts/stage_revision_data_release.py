@@ -74,7 +74,20 @@ SUITE_STEMS = {
         "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_noise_only_p50_80",
         "noise_only",
     ),
+    # already ships its own merged _raw and summaries, so it goes through the
+    # ordinary copy path rather than being re-merged from shards
+    "size_h1024_p50_80": (
+        "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_revised_task_only_p50_80",
+        "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_revised_task_only_p50_80",
+    ),
 }
+# The revision reports results at hidden size 1024 as well as 512, so the
+# deposit has to ship those trained networks too. Without them the size
+# comparison is not reproducible at all: the H=1024 suites load these 24
+# checkpoints and nothing else in either deposit provides them. 101 MB.
+H1024_CHECKPOINT_DIRS = tuple(
+    f"tanh_h1024_modcog_revised8_to12k_lr0006_seqbest_no_l2_seed{seed}" for seed in (0, 1, 2)
+)
 DM1ANTI_CHECKPOINT_DIRS = tuple(
     f"tanh_h512_modcog_dm1anti_to12k_lr0006_seqbest_no_l2_seed{seed}" for seed in (0, 1, 2)
 )
@@ -123,6 +136,19 @@ RENORM_SUITES = {
 
 # The paper's statistics, which also changed -- from Wilcoxon/Holm to a
 # hierarchical bootstrap with an exact sign-flip test.
+# Suites the runner shards by (task, sparsity) and that the deposit therefore
+# ships merged, like the re-run. Without the first, two rows of
+# key_comparisons.csv cannot be recomputed from the deposit and
+# build_cube(FULL_ARMS) cannot run at all. Without the other two, three of the
+# seven arms in the published two-size figure -- magnitude, OBS and random at
+# H=1024 -- have no data here.
+SHARDED_SUITES = {
+    "fig3_lowsparsity_h512_p10_40":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_fig3_lowsparsity_p10_40",
+    "size_h1024_p10_40":
+        "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_revised_task_only_p10_40",
+}
+
 NEW_STATS_DIR = PROJECT / "analysis/paper_statistics"
 
 # Deposit-relative files the re-run REPLACES outright. Deliberately empty, and
@@ -188,7 +214,7 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
         for source in sorted((ANALYSIS / sub).glob("*.csv")):
             pairs.append((source, revision / sub / source.name))
 
-    for name in DM1ANTI_CHECKPOINT_DIRS:
+    for name in DM1ANTI_CHECKPOINT_DIRS + H1024_CHECKPOINT_DIRS:
         for source in sorted((PROJECT / "checkpoints" / name).glob("*.pt")):
             pairs.append((source, deposit / "checkpoints" / name / source.name))
 
@@ -219,6 +245,17 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
         for source in sorted((config_root / stem).glob("*.json")):
             pairs.append((source, renorm / "configs" / label / source.name))
 
+    # --- the sharded suites the paper's figures and statistics still read
+    sharded = deposit / "results/revision_2026/sharded_suites"
+    for label, stem in SHARDED_SUITES.items():
+        merged = merge_suite(stem, staging)
+        if merged is None:
+            print(f"  note: suite {stem} has no results yet; skipped")
+            continue
+        pairs.append((merged, sharded / f"{label}.csv"))
+        for source in sorted((config_root / stem).glob("*.json")):
+            pairs.append((source, sharded / "configs" / label / source.name))
+
     # --- the paper's statistics under the new procedure
     for source in sorted(NEW_STATS_DIR.glob("*.csv")):
         pairs.append((source, deposit / "results/statistics_2026_10" / source.name))
@@ -226,6 +263,20 @@ def plan_copies(deposit: Path) -> List[Tuple[Path, Path]]:
         pairs.append((source, deposit / "results/statistics_2026_10" / "code" / source.name))
 
     return [(src, dst) for src, dst in pairs if src.is_file()]
+
+
+# The two cap-dependent arms were re-run at the recalibrated constant, under the
+# SAME run_ids. If the primary H=512 table kept its capped rows, the deposit
+# would carry each of those 1,152 runs twice at two different caps, with
+# colliding run_ids -- anyone concatenating the tables would double-count them
+# and silently average two caps. The primary table therefore sheds the arms the
+# recap table supersedes, so every run_id in the deposit appears exactly once.
+SUPERSEDED_BY_RECAP = {
+    "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_p10_80": (
+        "simulation_noise_prune_capped_rescale",
+        "simulation_noise_prune_capped_magnitude_rescale",
+    ),
+}
 
 
 def merge_suite(stem: str, out_dir: Path) -> Path | None:
@@ -237,11 +288,24 @@ def merge_suite(stem: str, out_dir: Path) -> Path | None:
     import pandas as pd
 
     src = RESULTS / stem
-    shards = sorted(f for f in src.glob("*.csv") if "logs" not in f.parts)
+    # Only the per-task shards. A suite that already ships its own merged
+    # `_raw.csv` or a summary would otherwise be concatenated with itself --
+    # which is exactly what the duplicate-run_id guard caught for the H=1024
+    # p50-80 suite, where shards plus _raw gave 2,059 collisions.
+    DERIVED = ("_summary", "_raw", "_merged", "_vs_", "_paired", "_plot_points",
+               "_holm_tests", "_regression_check", "_gain_audit", "_contribution")
+    shards = sorted(f for f in src.glob("*.csv")
+                    if "logs" not in f.parts and not any(k in f.name for k in DERIVED))
     if not shards:
         return None
     frames = [pd.read_csv(f, low_memory=False) for f in shards]
     merged = pd.concat(frames, ignore_index=True)
+    drop = SUPERSEDED_BY_RECAP.get(stem)
+    if drop and "strategy" in merged:
+        before = len(merged)
+        merged = merged[~merged.strategy.isin(drop)]
+        print(f"  {stem}: dropped {before - len(merged)} rows superseded by the "
+              f"recalibrated-cap re-run")
     dupes = int(merged.run_id.duplicated().sum()) if "run_id" in merged else 0
     if dupes:
         raise SystemExit(f"{stem}: {dupes} duplicate run_ids across shards; "
@@ -282,10 +346,19 @@ def affected_fraction(path: Path) -> tuple[int, int]:
     return (int(hit.sum()), len(d))
 
 
+# The re-run and the statistics computed from it ARE the corrected data. They
+# must never be listed as containing pre-correction rows: a reader following
+# that instruction would filter out the paper's primary evidence and keep the
+# superseded tables instead, the exact opposite of the intent.
+AUDIT_SKIP_DIRS = ("results/renormalized_2026_10/", "results/statistics_2026_10/")
+
+
 def audit_deposit(deposit: Path) -> dict:
     """Classify every deposit CSV by how much of it the re-run supersedes."""
     whole, mixed = [], []
     for path in sorted(deposit.rglob("*.csv")):
+        if any(path.relative_to(deposit).as_posix().startswith(d) for d in AUDIT_SKIP_DIRS):
+            continue
         aff, tot = affected_fraction(path)
         if not aff:
             continue
@@ -318,8 +391,15 @@ def write_superseded_note(deposit: Path, audit: dict) -> Path:
         "",
     ] + [f"  - `{s}`" for s in SAMPLING_STRATEGIES] + [
         "",
-        "They were re-run over 10-80% at both network sizes. **The re-run is the data the",
-        "paper reports**, and it is deposited under `results/renormalized_2026_10/`.",
+        "All six were re-run over 10-80% at H=512. At H=1024 four were re-run -- the",
+        "plain and capped rescales on both scores -- while the shuffled and uniform",
+        "probability controls were not, because the size comparison does not use them.",
+        "**The re-run is the data the paper reports**, and it is deposited under",
+        "`results/renormalized_2026_10/`.",
+        "",
+        "The Lyapunov family (`noise_prune*`, called L-NP or V-NP in older tables) is",
+        "affected by the identical defect and was NOT re-run. It is not reported in the",
+        "revised paper. Treat any L-NP row anywhere in this deposit as pre-correction.",
         "",
         "Four strategies are deterministic and were NOT affected; their numbers are",
         "bit-identical before and after: `l1_unstructured`, `obs_compensated`,",
@@ -347,7 +427,8 @@ def write_superseded_note(deposit: Path, audit: dict) -> Path:
         "",
         "## Files removed",
         "",
-    ] + ([f"  - `{p}`" for p in SUPERSEDED_WHOLE] or ["  (none -- see the note above)"]) + [
+    ] + ([f"  - `{rel}`  ({aff} rows)" for rel, aff, _t in audit["whole"]]
+         or ["  (none -- see the note above)"]) + [
         "",
         "These statistical outputs are superseded by the change of PROCEDURE, not only of",
         "data: the paper now reports a hierarchical bootstrap over tasks with an exact",
@@ -454,13 +535,13 @@ def main() -> None:
         print(f"removed {len(removed)} superseded files")
         for rel in removed:
             print(f"   - {rel}")
-        note = write_superseded_note(deposit, audit_deposit(deposit))
-        print(f"wrote {note.relative_to(deposit)}")
-
     before = 0
     manifest_path = deposit / "manifest.json"
     if manifest_path.is_file():
         before = len(json.loads(manifest_path.read_text()).get("files", []))
+    # after staging, so the counts describe what actually shipped
+    note = write_superseded_note(deposit, audit_deposit(deposit))
+    print(f"wrote {note.relative_to(deposit)} from the post-staging audit")
     count = write_manifests(deposit)
     print(f"manifests rebuilt: {before} -> {count} records "
           f"(MANIFEST.sha256 and manifest.json)")

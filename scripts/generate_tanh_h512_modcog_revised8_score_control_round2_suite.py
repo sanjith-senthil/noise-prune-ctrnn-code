@@ -91,8 +91,11 @@ METHODS = (
     # is the mean-field reading (g^2 = N Var(w)). Measured rather than interpolated
     # because the gain response is sharp enough that a 7% difference in factor moves
     # retention substantially.
-    ("magnitude_gain_jlin", "l1_unstructured_gain", {"gain_mode": "match_rho_jlin"}),
-    ("magnitude_gain_l2", "l1_unstructured_gain", {"gain_mode": "match_l2"}),
+    # match_rho_jlin and match_l2 were removed from GAIN_MODES in d32ce4a and
+    # stripped from the deposit, so emitting them here would write configs the
+    # pruner rejects. This runner regenerates its configs before launching, so
+    # leaving them in silently overwrote the corrected configs on disk and then
+    # failed two arms out of nine with a ValueError.
     # Synaptic scaling: per-neuron restoration of total absolute input weight. The only
     # rescale here that is a *local* rule -- each row's factor depends solely on the
     # weights that neuron receives -- so it is the biologically motivated baseline and

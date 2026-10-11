@@ -171,20 +171,29 @@ def shard_suffix(amount) -> str:
 def validate(h: int, require_checkpoints: bool) -> None:
     if h == 512:
         raise SystemExit("Refusing H=512: that suite exists and is frozen.")
-    missing = []
+    # Checkpoints are required -- a trained network cannot be rebuilt. The fixed
+    # batch caches are not: the runner regenerates them deterministically from
+    # the seeds each config records, so demanding them here blocked the
+    # documented entry point on files the run itself would have written.
+    missing_ckpt, missing_cache = [], []
     for seed in NETWORK_SEEDS:
         for t, _task, _ng in TASKS:
             if require_checkpoints and not Path(checkpoint_path(h, t, seed)).exists():
-                missing.append(checkpoint_path(h, t, seed))
+                missing_ckpt.append(checkpoint_path(h, t, seed))
             if not Path(eval_batches_path(t)).exists():
-                missing.append(eval_batches_path(t))
+                missing_cache.append(eval_batches_path(t))
             for s in PRUNING_SEEDS:
                 if not Path(score_batches_path(t, s)).exists():
-                    missing.append(score_batches_path(t, s))
-    if missing:
+                    missing_cache.append(score_batches_path(t, s))
+    if missing_ckpt:
         raise SystemExit(
-            f"{len(set(missing))} required file(s) absent — refusing to emit a suite with "
-            f"silent gaps:\n" + "\n".join(sorted(set(missing))[:12]))
+            f"{len(set(missing_ckpt))} trained checkpoint(s) absent, and they cannot be\n"
+            f"regenerated. They are in the data deposit under checkpoints/; place or\n"
+            f"symlink that directory at the root of this repository.\n"
+            + "\n".join(sorted(set(missing_ckpt))[:12]))
+    if missing_cache:
+        print(f"note: {len(set(missing_cache))} fixed-batch cache files are absent; the "
+              f"runner will build and cache them from the recorded seeds on first use.")
 
 
 def make_unit(h: int, task_label: str, task: str, ng_t: int,

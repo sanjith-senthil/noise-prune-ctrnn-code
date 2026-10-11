@@ -108,14 +108,32 @@ def score_batches_path(task: str, seed: int) -> str:
 
 
 def validate_inputs() -> None:
-    missing = []
+    """Refuse to generate configs whose inputs are absent -- but only the inputs
+    that cannot be recreated.
+
+    Checkpoints are required: nothing can rebuild a trained network. The fixed
+    evaluation and pruning-score batches are NOT required, because the runner
+    builds and caches them deterministically from the seeds recorded in every
+    config when the cache file is missing (runner.py, _load_batch_list /
+    _save_batch_list). Demanding them here blocked the documented entry point on
+    exactly the 32 files the run it was preparing would have created.
+    """
+    missing_ckpt, missing_cache = [], []
     for seed in NETWORK_SEEDS:
         for task, _t, _n in TASKS:
-            need = [checkpoint_path(task, seed), eval_batches_path(task)]
-            need += [score_batches_path(task, s) for s in PRUNING_SEEDS]
-            missing += [p for p in need if not Path(p).exists()]
-    if missing:
-        raise SystemExit("Missing required files:\n" + "\n".join(sorted(set(missing))))
+            if not Path(checkpoint_path(task, seed)).exists():
+                missing_ckpt.append(checkpoint_path(task, seed))
+            cache = [eval_batches_path(task)] + [score_batches_path(task, s) for s in PRUNING_SEEDS]
+            missing_cache += [p for p in cache if not Path(p).exists()]
+    if missing_ckpt:
+        raise SystemExit(
+            "Missing trained checkpoints, which cannot be regenerated. They are in the\n"
+            "data deposit under checkpoints/; place or symlink that directory at the root\n"
+            "of this repository.\n\n" + "\n".join(sorted(set(missing_ckpt))))
+    if missing_cache:
+        n = len(set(missing_cache))
+        print(f"note: {n} fixed-batch cache files are absent; the runner will build and "
+              f"cache them from the recorded seeds on first use.")
 
 
 def defaults_block() -> dict:
