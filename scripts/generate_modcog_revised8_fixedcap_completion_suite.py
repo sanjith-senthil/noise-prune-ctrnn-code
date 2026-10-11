@@ -56,7 +56,13 @@ PLAN = {
     512: (
         ("fixedps_full",  FULL, lambda a: PER_SPARSITY[round(a, 2)], (0.8,)),
         ("fixedps_mag",   MAG,  lambda a: PER_SPARSITY[round(a, 2)], (0.8,)),
-        ("fixedg38_full", FULL, lambda a: GLOBAL_50_80, (0.5, 0.6, 0.7, 0.8)),
+        # extended to 10-40% 2026-09-24 so Figure 1 can show the capped arm over
+        # the paper's full sparsity range with ONE constant factor throughout.
+        # At low sparsity most p sit near 1, so a 3.8x bound barely binds and the
+        # arm converges on the uncapped one -- which is the honest behaviour of a
+        # single fixed rule, not a gap.
+        ("fixedg38_full", FULL, lambda a: GLOBAL_50_80,
+         (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)),
         ("fixedg38_mag",  MAG,  lambda a: GLOBAL_50_80, (0.5, 0.6, 0.7, 0.8)),
     ),
     1024: (
@@ -66,7 +72,7 @@ PLAN = {
         ("fixedg31_mag",  MAG,  lambda a: GLOBAL_50_70, (0.5, 0.6, 0.7)),
     ),
 }
-ALL_AMOUNTS = (0.5, 0.6, 0.7, 0.8)
+ALL_AMOUNTS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 
 
 def suite_stem(h): return f"task_preservation_tanh_h{h}_modcog_revised8_12k_seqbest_fixedcapfull_p50_80"

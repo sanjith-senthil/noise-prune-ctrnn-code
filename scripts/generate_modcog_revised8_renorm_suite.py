@@ -105,7 +105,13 @@ ARMS_1024_REST = (
     ("snp_capped_mag", "simulation_noise_prune_capped_magnitude_rescale",
      {"rescale_cap_mode": "fixed", "rescale_cap_value": CAP_VALUE}),
 )
-ARM_SET = "first"          # "first" or "rest"; set by --arm-set
+# Only the two capped arms depend on the cap constant, so a recalibration needs
+# only those re-run. The other four sampling arms would reproduce byte for byte
+# -- same seeds, same code, cap irrelevant -- and re-running them would waste
+# about three hours and invite confusion about why two suites hold identical
+# numbers.
+ARMS_512_CAPPED = tuple(a for a in ARMS_512 if "capped" in a[1])
+ARM_SET = "first"          # "first" | "rest" | "capped"; set by --arm-set
 
 # every arm here drives a probability control except the two plain rescales
 CONTROLLED = {
@@ -139,7 +145,7 @@ def shard(amount: float) -> str:
 
 def arms(h: int):
     if h == 512:
-        return ARMS_512
+        return ARMS_512_CAPPED if ARM_SET == "capped" else ARMS_512
     return ARMS_1024 if ARM_SET == "first" else ARMS_1024_REST
 
 
@@ -211,8 +217,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     global ARM_SET, CAP_VALUE, ARMS_512, ARMS_1024_REST, STEM_TAG
     ap.add_argument("--hidden-size", type=int, default=512, choices=(512, 1024))
-    ap.add_argument("--arm-set", default="first", choices=("first", "rest"),
-                    help="H=1024 only: 'first' is snp_rescale, 'rest' is the other three")
+    ap.add_argument("--arm-set", default="first", choices=("first", "rest", "capped"),
+                    help="'first' the primary set; 'rest' the three H=1024 arms the "
+                         "first pass skipped; 'capped' only the two cap-dependent arms")
     ap.add_argument("--cap-value", type=float, default=None,
                     help="override the constant amplification cap")
     ap.add_argument("--stem-tag", default="",
@@ -233,6 +240,9 @@ def main() -> None:
         ARMS_1024_REST = tuple(
             (l, s, ({**e, "rescale_cap_value": CAP_VALUE} if "rescale_cap_value" in e else e))
             for l, s, e in ARMS_1024_REST)
+        globals()["ARMS_512_CAPPED"] = tuple(
+            (l, s, ({**e, "rescale_cap_value": CAP_VALUE} if "rescale_cap_value" in e else e))
+            for l, s, e in ARMS_512 if "capped" in s)
 
     tasks = _rs.TASKS if h == 512 else _st.TASKS
     if h == 512:

@@ -47,8 +47,18 @@ AMOUNTS = (0.5, 0.6, 0.7, 0.8)
 PRUNING_SEED = 0
 STRATEGY = "simulation_noise_prune_gain"
 
+# match_l1_rowwise is synaptic scaling proper: W[i, j] is the synapse from j to
+# i (nn.Linear computes fr @ W.T), so summing over dim=1 collects what neuron i
+# RECEIVES, which is the axis a postsynaptic homeostatic rule acts on. Verified
+# empirically: setting W[4,1] and driving unit 1 changes unit 4 only.
+#
+# match_l1_colwise is its presynaptic mirror -- each neuron's total OUTGOING
+# weight restored instead. Equally local and equally cheap, but driven by the
+# sending neuron; homeostasis is not known to work that way, so it is a control
+# on whether the axis matters rather than a candidate mechanism.
 ARMS = (
     ("snpgain_synaptic", "match_l1_rowwise"),
+    ("snpgain_colwise", "match_l1_colwise"),
     ("snpgain_invdensity", "inv_density"),
 )
 

@@ -33,7 +33,7 @@ for HIDDEN in ${SIZES}; do
   # stem would skip all 1,152 runs and leave the configs advertising a cap the
   # rows were never produced with. H=512 here means "re-run the capped arms at
   # a new cap", which is a different stem, not the primary one.
-  if [[ "${HIDDEN}" == "1024" ]]; then ARMSET="rest"; TAG="rest"; else ARMSET="first"; TAG="recap"; fi
+  if [[ "${HIDDEN}" == "1024" ]]; then ARMSET="rest"; TAG="rest"; else ARMSET="capped"; TAG="recap"; fi
   STEM="task_preservation_tanh_h${HIDDEN}_modcog_revised8_12k_seqbest_renorm_${TAG}_p10_80"
   LOG_DIR="results/${STEM}/logs"; mkdir -p "${LOG_DIR}"; rm -f "${LOG_DIR}"/*.log
   echo "=== H=${HIDDEN} arm-set=${ARMSET} cap=${CAP} ==="

@@ -113,6 +113,9 @@ SAMPLING_STRATEGIES = (
 # rest of the deposit treats raw rows.
 RENORM_SUITES = {
     "h512_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_p10_80",
+    # the two cap-dependent arms, re-run at the recalibrated constant 3.695;
+    # these supersede the capped rows in h512_p10_80, which used 3.8
+    "h512_recap_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_recap_p10_80",
     "h1024_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_p10_80",
     "h1024_rest_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_rest_p10_80",
     "capq50_h512_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capq50_p10_80",

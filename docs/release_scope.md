@@ -3,8 +3,12 @@
 This code release is scoped to the final manuscript analyses:
 
 - CTRNN training on the revised 8-task Mod-Cog battery.
-- Main task-preservation pruning suites at 50%, 60%, 70%, and 80% sparsity.
-- L-NP mask, L-NP rescale, S-NP mask, S-NP rescale, capped L-NP/S-NP
+- Main task-preservation pruning suites at 10% to 80% sparsity, in steps of 10,
+  at CTRNN hidden sizes 512 and 1024.
+- noise-prune mask and sample-and-rescale, the capped rescale on both the
+  noise and magnitude scores, magnitude sample-and-rescale, the deterministic
+  single-factor rescales, the shuffled and uniform probability controls, and
+  capped L-NP/S-NP
   rescale, random pruning, magnitude pruning, and OBS-compensated pruning.
 - Capped-rescale quantile suites and analysis scripts.
 - S-NP robustness checks cited in the manuscript.
