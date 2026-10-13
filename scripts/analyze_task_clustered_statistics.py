@@ -51,9 +51,32 @@ Outputs
 ``per_task_retention_curves.csv``
     Supplementary figure source: retention by task x method x sparsity
     (mean, SD, SEM over the 3 trained networks per task).
+
+
+SUPERSEDED. This implements the statistics of the ORIGINAL SUBMISSION --
+paired Wilcoxon tests with Holm correction across a family of comparisons. The
+revision does not use them. Every interval, effect size and p-value in the
+current manuscript comes from analysis/paper_statistics/paper_stats.py, which
+resamples tasks and then seeds hierarchically and tests with an exact sign-flip
+over all 2^8 assignments.
+
+Holm is not merely unused here, it is unusable: the sign-flip floor over 8 tasks
+is 2/256 = 0.0078, so a family of seven or more comparisons can never reject at
+0.05 no matter how large the effects are.
+
+Kept so the submitted analysis can still be reproduced and compared against the
+revised one. Does not run without --force.
 """
 
 from __future__ import annotations
+
+import sys
+
+if "--force" not in sys.argv:
+    raise SystemExit(
+        "analyze_task_clustered_statistics.py implements the ORIGINAL SUBMISSION's Wilcoxon/Holm statistics, which the "
+        "revision replaced. Use analysis/paper_statistics/run_paper_stats.py instead, "
+        "or pass --force to run this anyway.")
 
 import argparse
 import itertools

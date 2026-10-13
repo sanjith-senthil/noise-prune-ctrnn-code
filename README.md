@@ -127,6 +127,31 @@ python3 scripts/generate_tanh_h512_modcog_revised8_lnp_snp_capped_rescale_missin
 python3 -m pruning_benchmark --mode suite --config configs/task_preservation_tanh_h512_modcog_revised8_12k_seqbest_lnp_snp_capped_rescale_missing_q10_q20_q30_q40_q60_q70_q80_q90_pruneseeds1_2_full8_p50_80.json
 ```
 
+## Statistics
+
+Every interval, effect size and p-value in the manuscript comes from one module,
+`analysis/paper_statistics/paper_stats.py`. Tasks are resampled with
+replacement and then seeds within each task, so the hierarchy of the design (8
+tasks x 3 seeds) is respected; significance is an exact sign-flip test
+enumerating all 2^8 assignments. Repeated pruning draws are averaged away before
+any of this runs, so the stochastic and deterministic arms enter commensurable.
+
+```bash
+.venv/bin/python analysis/paper_statistics/test_paper_stats.py   # 37 checks
+.venv/bin/python analysis/paper_statistics/run_paper_stats.py    # the tables
+.venv/bin/python analysis/paper_statistics/capped_rescale_tables.py
+```
+
+The sign-flip floor over 8 tasks is 2/256 = 0.0078. A Holm correction across a
+family of seven or more therefore can never reject at 0.05 whatever the effect
+sizes, which is why the revision reports effect sizes with confidence intervals
+rather than a corrected family of tests.
+
+The three `scripts/analyze_*_statistics.py` and
+`scripts/validate_paper_relevant_statistics.py` files implement the ORIGINAL
+SUBMISSION's Wilcoxon/Holm analysis. They are retained for comparison and
+refuse to run without `--force`.
+
 Validate a colocated official artifact directory:
 
 ```bash
