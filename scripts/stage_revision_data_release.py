@@ -132,6 +132,11 @@ RENORM_SUITES = {
     "h1024_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_p10_80",
     "h1024_rest_p10_80": "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_renorm_rest_p10_80",
     "capq50_h512_p10_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capq50_p10_80",
+    # the cap-percentile sweep, re-run on the corrected rule; this is what
+    # Figure 5 panel a plots and what establishes that the optimum is interior
+    # and sits at the 50th percentile, which is where the constant 3.695 comes
+    # from
+    "capsweep_h512_p50_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capsweep_p50_80",
 }
 
 # The paper's statistics, which also changed -- from Wilcoxon/Holm to a
