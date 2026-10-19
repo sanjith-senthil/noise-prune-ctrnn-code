@@ -107,6 +107,14 @@ OFFDIAG = 512 * 511          # off-diagonal recurrent entries at H = 512
 # distribution as the mean q50 over 50-80% -- the same construction that
 # produced the published 3.8 from the old distribution, which measured 3.823.
 CAP_CONSTANT = 3.695
+# The magnitude score's own constant, derived by the IDENTICAL construction from
+# its own cap-percentile sweep: pooled optimum q60 -> 4.549, against the noise
+# score's q50 -> 3.695. Holding one number fixed for both scores tunes one side
+# only; holding the RULE fixed and letting each score set its own constant is
+# the matched comparison, and it is the one the paper reports. The magnitude
+# score wants a looser cap because it removes the small weights, which costs
+# more L1 mass than spectral gain and needs more amplification headroom.
+MAG_CAP_CONSTANT = 4.549
 # what the capped arms were run at BEFORE the recalibration; the legacy cube
 # has to ask for that value or it finds nothing
 LEGACY_CAP_CONSTANT = 3.8
@@ -123,7 +131,7 @@ ARMS = {
     "noise-prune + rescale":         dict(strategy="simulation_noise_prune_rescale"),
     "noise-prune score only":        dict(strategy="simulation_noise_prune_mask_only"),
     "magnitude + capped rescale":    dict(strategy="simulation_noise_prune_capped_magnitude_rescale",
-                                          cap="fixed", cap_value=CAP_CONSTANT),
+                                          cap="fixed", cap_value=MAG_CAP_CONSTANT),
     "magnitude + rescale":           dict(strategy="simulation_noise_prune_magnitude_rescale"),
     "magnitude":                     dict(strategy="l1_unstructured"),
     "OBS":                           dict(strategy="obs_compensated"),
@@ -198,7 +206,16 @@ RENORM_SOURCES = [
 RECAP_SOURCES = [
     "results/task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_recap_p10_80/*.csv",
 ]
-CAPPED_ARMS = frozenset({"noise-prune + capped rescale", "magnitude + capped rescale"})
+# the magnitude arm at ITS optimum lives in its own suite, run at 4.549
+MAGOPT_SOURCES = [
+    "results/task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_magopt_p10_80/*.csv",
+]
+# split by which constant each arm is entitled to, because they no longer share
+# one: the noise arm comes from the recap pool at 3.695, the magnitude arm from
+# the magopt pool at 4.549
+NOISE_CAPPED_ARMS = frozenset({"noise-prune + capped rescale"})
+MAG_CAPPED_ARMS = frozenset({"magnitude + capped rescale"})
+CAPPED_ARMS = NOISE_CAPPED_ARMS | MAG_CAPPED_ARMS
 
 # Every H=512 source the analysis draws on, named explicitly. The results tree
 # holds 18 tasks and many exploratory suites; globbing it would silently pull in
@@ -321,10 +338,13 @@ def build_cube(arms: dict | None = None, grid=GRID, source_set: str | None = Non
     d = load_runs(grid)
     d_renorm = load_runs(grid, RENORM_SOURCES) if source_set == "renorm" else None
     d_recap = load_runs(grid, RECAP_SOURCES) if source_set == "renorm" else None
+    d_magopt = load_runs(grid, MAGOPT_SOURCES) if source_set == "renorm" else None
 
     cells = {}
     for name, spec in arms.items():
-        if source_set == "renorm" and name in CAPPED_ARMS:
+        if source_set == "renorm" and name in MAG_CAPPED_ARMS:
+            pool = d_magopt
+        elif source_set == "renorm" and name in NOISE_CAPPED_ARMS:
             pool = d_recap
         elif source_set == "renorm" and name in SAMPLING_ARMS:
             pool = d_renorm
@@ -336,7 +356,7 @@ def build_cube(arms: dict | None = None, grid=GRID, source_set: str | None = Non
         if s.empty:
             raise ValueError(
                 f"arm {name!r} selected no rows from the "
-                f"{'recap' if pool is d_recap else 'renorm' if pool is d_renorm else 'legacy'} pool")
+                f"{'magopt' if pool is d_magopt else 'recap' if pool is d_recap else 'renorm' if pool is d_renorm else 'legacy'} pool")
         g = s.groupby(["task_short", "source_network_seed", "pct"])
         cells[name] = pd.DataFrame({"ret": g.ret.mean(), "n": g.size()})
 
