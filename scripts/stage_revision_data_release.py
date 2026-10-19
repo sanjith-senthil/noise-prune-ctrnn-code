@@ -137,6 +137,47 @@ RENORM_SUITES = {
     # and sits at the 50th percentile, which is where the constant 3.695 comes
     # from
     "capsweep_h512_p50_80": "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capsweep_p50_80",
+
+    # --- each score capped at its OWN constant -----------------------------
+    # The same sweep applied to the magnitude score: its pooled optimum is q60,
+    # a decile looser than the noise score's q50, giving 4.549 against 3.695.
+    "capsweep_mag_h512_p50_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capsweep_mag_p50_80",
+    # The capped arms re-run at 4.549. This is the magnitude arm the paper
+    # reports, and the noise arm at 4.549 completes the {score} x {cap} 2x2.
+    "magopt_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_magopt_p10_80",
+    # The same arms at 3.584, the magnitude score's q50. Superseded as the
+    # reported cap -- the sweep put magnitude's optimum at q60 -- but kept
+    # because it is the third point that establishes how little the constant
+    # matters within a score.
+    #
+    # IT MUST STAY ITS OWN TABLE. Its run_ids are identical to magopt's, because
+    # the generator builds run_id from (task, netseed, arm, sparsity, draw) and
+    # the cap is not in it. All 1,152 collide if the two are merged, which is
+    # exactly the duplication this deposit was cleaned of once before.
+    "magcap_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_renorm_magcap_p10_80",
+
+    # --- controls ----------------------------------------------------------
+    # The noise score with a global factor, so Figure 3's sampling contrast is
+    # within-score rather than confounded with a change of score.
+    "score_matched_gain_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_score_matched_gain_p10_80",
+    # The same for the random mask. This is the control that shows a global
+    # factor is not uniformly useless: it lifts an unbiased mask and destroys a
+    # biased one.
+    "random_gain_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_random_gain_p10_80",
+    # Task input x injected noise, re-run on the corrected rule. The original
+    # 2x2 predates the probability fix and both its cells are rescale variants,
+    # so both were affected.
+    "cov2x2_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_cov2x2_p10_80",
+    # Pruning on dm1 and anti, the two excluded tasks. Establishes what the
+    # baselines could not: that the methods stop separating on them.
+    "dm1anti_pruning_p10_80":
+        "task_preservation_tanh_h512_modcog_dm1anti_12k_seqbest_pruning_p10_80",
 }
 
 # The paper's statistics, which also changed -- from Wilcoxon/Holm to a
