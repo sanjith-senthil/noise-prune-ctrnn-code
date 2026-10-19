@@ -44,8 +44,24 @@ AMOUNTS = (0.5, 0.6, 0.7, 0.8)
 QUANTILES = (0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90)
 NETWORK_SEEDS = _rn.NETWORK_SEEDS
 PRUNING_SEEDS = _rn.PRUNING_SEEDS
-STRATEGY = "simulation_noise_prune_capped_rescale"
-SUITE_STEM = "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capsweep_p50_80"
+
+# The sweep runs on one score at a time. "noise" is the original and its stem,
+# strategy and run_ids are left exactly as they were -- the harness resumes on
+# run_id alone, so renaming them would orphan the 2,592 rows already on disk.
+#
+# "magnitude" is the symmetric arm. Figure 5 reports the noise score at a cap
+# derived from ITS sweep, so comparing it against magnitude at that same number
+# tunes one side only. Sweeping magnitude the same way lets each score pick its
+# own best percentile, which is the comparison that survives the obvious
+# referee question.
+SCORES = {
+    "noise":     ("simulation_noise_prune_capped_rescale",
+                  "capsweep", "capsweep_p50_80"),
+    "magnitude": ("simulation_noise_prune_capped_magnitude_rescale",
+                  "capsweep_mag", "capsweep_mag_p50_80"),
+}
+STRATEGY, RUNID_PREFIX, _STEM_TAG = SCORES["noise"]
+SUITE_STEM = f"task_preservation_tanh_h512_modcog_revised8_12k_seqbest_{_STEM_TAG}"
 
 
 def shard(a): return f"_p{int(round(a * 100))}"
@@ -58,7 +74,8 @@ def make_unit(task_label, ng_t, amount):
         for q in QUANTILES:
             for ps in PRUNING_SEEDS:
                 runs.append({
-                    "run_id": (f"capsweep_{task_label}_netseed{seed}_q{int(round(q*100))}"
+                    "run_id": (f"{RUNID_PREFIX}_{task_label}_netseed{seed}"
+                               f"_q{int(round(q*100))}"
                                f"_p{int(round(amount*100))}_pruneseed{ps}"),
                     "strategy": STRATEGY, "amount": amount,
                     "seed": ps, "pruning_seed": ps, "noise_rng_seed": ps,
@@ -73,7 +90,14 @@ def make_unit(task_label, ng_t, amount):
 
 
 def main() -> None:
-    argparse.ArgumentParser().parse_args()
+    global STRATEGY, RUNID_PREFIX, SUITE_STEM
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--score", default="noise", choices=sorted(SCORES),
+                    help="which score the sweep caps; 'noise' reproduces the "
+                         "original sweep byte for byte")
+    args = ap.parse_args()
+    STRATEGY, RUNID_PREFIX, tag = SCORES[args.score]
+    SUITE_STEM = f"task_preservation_tanh_h512_modcog_revised8_12k_seqbest_{tag}"
     _rs.validate_inputs()
     cfg = Path(f"configs/{SUITE_STEM}")
     cfg.mkdir(parents=True, exist_ok=True)
