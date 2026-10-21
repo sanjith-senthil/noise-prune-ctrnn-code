@@ -143,6 +143,14 @@ RENORM_SUITES = {
     # a decile looser than the noise score's q50, giving 4.549 against 3.695.
     "capsweep_mag_h512_p50_80":
         "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_capsweep_mag_p50_80",
+    # The same sweep at H = 1024, which asks whether the optimal percentile is a
+    # property of the rule or of the size. It is of the size: the optimum moves
+    # from q50 to q60 and the constant it implies from 3.695 to 4.821, with the
+    # cap value scaling by 1.29-1.31 at every sparsity. That is why the constant
+    # does not transfer -- at 80% sparsity H = 1024 wants 7.74 and the paper
+    # applies 3.695 -- and why capping reverses there at the larger size.
+    "capsweep_h1024_p50_80":
+        "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_capsweep_p50_80",
     # The capped arms re-run at 4.549. This is the magnitude arm the paper
     # reports, and the noise arm at 4.549 completes the {score} x {cap} 2x2.
     "magopt_h512_p10_80":

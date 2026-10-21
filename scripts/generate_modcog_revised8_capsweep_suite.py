@@ -60,6 +60,12 @@ SCORES = {
     "magnitude": ("simulation_noise_prune_capped_magnitude_rescale",
                   "capsweep_mag", "capsweep_mag_p50_80"),
 }
+# The sweep also runs at H = 1024, to ask whether the optimal percentile moves
+# with size. It matters: the constant the paper reports was derived at H = 512
+# and transfers badly at that size -- capping REVERSES at 80% there -- and a
+# size-dependent optimum would be the explanation. H = 1024 keeps its own stem
+# and run_id prefix so neither size can resume into the other's rows.
+HIDDEN = 512
 STRATEGY, RUNID_PREFIX, _STEM_TAG = SCORES["noise"]
 SUITE_STEM = f"task_preservation_tanh_h512_modcog_revised8_12k_seqbest_{_STEM_TAG}"
 
@@ -70,7 +76,7 @@ def shard(a): return f"_p{int(round(a * 100))}"
 def make_unit(task_label, ng_t, amount):
     runs = []
     for seed in NETWORK_SEEDS:
-        c = _rs._common(task_label, ng_t, seed)
+        c = _rn.common(HIDDEN, task_label, ng_t, seed)
         for q in QUANTILES:
             for ps in PRUNING_SEEDS:
                 runs.append({
@@ -80,9 +86,9 @@ def make_unit(task_label, ng_t, amount):
                     "strategy": STRATEGY, "amount": amount,
                     "seed": ps, "pruning_seed": ps, "noise_rng_seed": ps,
                     "score_batch_seed": 100_000 + ps,
-                    "score_batches_path": _rs.score_batches_path(task_label, ps),
+                    "score_batches_path": _rn.score_path(HIDDEN, task_label, ps),
                     "rescale_cap_quantile": q, **c})
-    d = dict(_rs.defaults_block())
+    d = dict(_rn.defaults(HIDDEN))
     d["sim_np_prob_normalize"] = _rn.NORMALIZE
     return {"run_id": f"{SUITE_STEM}_{task_label}{shard(amount)}",
             "output_csv": f"results/{SUITE_STEM}/{task_label}{shard(amount)}.csv",
@@ -90,15 +96,20 @@ def make_unit(task_label, ng_t, amount):
 
 
 def main() -> None:
-    global STRATEGY, RUNID_PREFIX, SUITE_STEM
+    global STRATEGY, RUNID_PREFIX, SUITE_STEM, HIDDEN
     ap = argparse.ArgumentParser()
     ap.add_argument("--score", default="noise", choices=sorted(SCORES),
                     help="which score the sweep caps; 'noise' reproduces the "
                          "original sweep byte for byte")
+    ap.add_argument("--hidden-size", type=int, default=512, choices=(512, 1024))
     args = ap.parse_args()
+    HIDDEN = args.hidden_size
     STRATEGY, RUNID_PREFIX, tag = SCORES[args.score]
-    SUITE_STEM = f"task_preservation_tanh_h512_modcog_revised8_12k_seqbest_{tag}"
-    _rs.validate_inputs()
+    if HIDDEN != 512:
+        RUNID_PREFIX = f"{RUNID_PREFIX}_h{HIDDEN}"
+    SUITE_STEM = (f"task_preservation_tanh_h{HIDDEN}_modcog_revised8_12k_seqbest_{tag}")
+    if HIDDEN == 512:
+        _rs.validate_inputs()
     cfg = Path(f"configs/{SUITE_STEM}")
     cfg.mkdir(parents=True, exist_ok=True)
     Path(f"results/{SUITE_STEM}").mkdir(parents=True, exist_ok=True)
@@ -110,7 +121,7 @@ def main() -> None:
                 json.dumps(u, indent=2) + "\n")
             total += len(u["runs"]); n += 1
     print(f"wrote {n} configs to {cfg}; total runs {total}")
-    print(f"  quantiles {[int(q*100) for q in QUANTILES]}; sparsities "
+    print(f"  H = {HIDDEN}; quantiles {[int(q*100) for q in QUANTILES]}; sparsities "
           f"{[int(a*100) for a in AMOUNTS]}; normalisation {_rn.NORMALIZE}")
 
 
