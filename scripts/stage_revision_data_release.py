@@ -201,6 +201,32 @@ SHARDED_SUITES = {
         "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_fig3_lowsparsity_p10_40",
     "size_h1024_p10_40":
         "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_revised_task_only_p10_40",
+
+    # --- three suites the live code reads that were never deposited ---------
+    # Found by checking every source path in final_style.SOURCES and
+    # paper_stats.SOURCES against the manifest. The first is the worst of them:
+    # it is a source for BOTH the figures and the statistics, so a referee
+    # re-running the deposited analysis on the deposited data hits a missing
+    # path rather than a missing interval.
+    "fixedcapfull_h512_p50_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_fixedcapfull_p50_80",
+    # The H=1024 half of the same arm, which the two-size SI figure draws.
+    "fixedcapfull_h1024_p50_80":
+        "task_preservation_tanh_h1024_modcog_revised8_12k_seqbest_fixedcapfull_p50_80",
+    # Gain restoration on the NOISE-PRUNE mask at 50-80%: row-wise (synaptic
+    # scaling proper), its column-wise mirror, and 1/density. The density-
+    # matched control's interval cannot be resampled without it -- only the
+    # per-sparsity means were deposited, which give the average but not the
+    # bootstrap.
+    "synaptic_h512_p50_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_synaptic_p50_80",
+    # The neuron-wise rules over the full 10-80% range, on BOTH masks: the
+    # magnitude mask at every sparsity (the arm the manuscript sentence
+    # describes, previously n = 8 and 50-80% for row-wise and absent for
+    # column-wise) and the noise-prune mask at 10-40%, which completes that
+    # mask's range against the suite above.
+    "neuronwise_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_neuronwise_p10_80",
 }
 
 NEW_STATS_DIR = PROJECT / "analysis/paper_statistics"
@@ -360,10 +386,26 @@ def merge_suite(stem: str, out_dir: Path) -> Path | None:
         merged = merged[~merged.strategy.isin(drop)]
         print(f"  {stem}: dropped {before - len(merged)} rows superseded by the "
               f"recalibrated-cap re-run")
-    dupes = int(merged.run_id.duplicated().sum()) if "run_id" in merged else 0
-    if dupes:
-        raise SystemExit(f"{stem}: {dupes} duplicate run_ids across shards; "
-                         f"refusing to deposit a table that double-counts runs")
+    # A run emitted identically by two shards is not two runs. Suites run in
+    # more than one pass re-emit the unpruned baseline in each pass -- the
+    # H=512 fixedcapfull suite carries its 24 baselines twice, once from the
+    # p10 pass and once from p50, agreeing to the last digit on every measured
+    # column. Collapsing those is correct; collapsing two runs that DISAGREE
+    # would hide a real re-run, so the key is run_id PLUS what was measured,
+    # the same key paper_stats.DEDUP_KEY uses and for the same reason.
+    if "run_id" in merged:
+        value_cols = [c for c in ("post_acc_sequence", "post_rec_weight_nz_count",
+                                  "pre_acc_sequence") if c in merged]
+        before = len(merged)
+        merged = merged.drop_duplicates(subset=["run_id"] + value_cols)
+        if before != len(merged):
+            print(f"  {stem}: collapsed {before - len(merged)} rows re-emitted "
+                  f"identically by more than one shard")
+        dupes = int(merged.run_id.duplicated().sum())
+        if dupes:
+            raise SystemExit(
+                f"{stem}: {dupes} run_ids appear more than once with DIFFERENT "
+                f"measured values; refusing to deposit a table that double-counts runs")
     out_dir.mkdir(parents=True, exist_ok=True)
     dst = out_dir / f"{stem}_merged.csv"
     merged.to_csv(dst, index=False)
