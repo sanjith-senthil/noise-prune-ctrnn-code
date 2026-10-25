@@ -16,6 +16,25 @@ windows cost the same simulation, rather than the sample cap giving a whole-tria
 window only 3 rollouts.
 
 4 arms x 8 tasks x 3 network seeds x 3 sparsities = 288 runs, n = 24.
+
+--full-range RE-RUNS THIS UNDER THE CORRECTED PROBABILITY NORMALISATION, over
+10-80%, into its own suite stem. The original run predates the fix: every row
+of it records prune_prob_normalize_mode = clip, the scale-then-clip rule that
+kept fewer edges than requested. The drive axis was re-run under bisect in
+..._cov2x2_p10_80, but only at the END-STEP window, so the whole-trial arms --
+and therefore the whole 2x2 -- still rest on the uncorrected rule. The verdict
+they support is that no alternative estimator beats the published one, and its
+closest call was whole-trial/noise-only at 60% (+0.017, p = 0.053), near enough
+to the threshold that the correction could move it either way.
+
+All four cells are re-run, not just the two whole-trial ones, because the point
+of this suite is that the 2x2 is paired within trained network rather than
+joined across suites; taking two cells from here and two from cov2x2 would give
+up exactly that. The end-step pair also re-serves as a regression check against
+cov2x2, which holds the same two settings at three pruning seeds.
+
+The range widens to 10-80% so the comparison carries the normalised AUC the
+paper's statistics use, which a 50-70% window cannot support.
 """
 from __future__ import annotations
 import argparse, importlib.util, json
@@ -31,6 +50,10 @@ CONFIG_DIR = Path("configs/window_drive")
 OUTPUT_DIR = _rs.RESULT_ROOT / SUITE_STEM
 TASKS, NETWORK_SEEDS = _rs.TASKS, _rs.NETWORK_SEEDS
 AMOUNTS = (0.5, 0.6, 0.7)
+# --full-range writes a SEPARATE stem. The clip-era results stay on disk as the
+# before-and-after of the correction; overwriting them would destroy that.
+FULL_STEM = "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_windowdrive_renorm_p10_80"
+FULL_AMOUNTS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 PRUNING_SEED = 0
 ROLLOUTS = 98
 STRAT = "simulation_noise_prune_rescale"
@@ -76,7 +99,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--validate-inputs", action="store_true")
     ap.add_argument("--shard-by-sparsity", action="store_true")
+    ap.add_argument("--full-range", action="store_true",
+                    help="re-run the 2x2 under the corrected normalisation over "
+                         "10-80%%, into its own suite stem")
     a = ap.parse_args()
+    global SUITE_STEM, CONFIG_DIR, OUTPUT_DIR, AMOUNTS
+    if a.full_range:
+        SUITE_STEM = FULL_STEM
+        CONFIG_DIR = Path(f"configs/{FULL_STEM}")
+        OUTPUT_DIR = _rs.RESULT_ROOT / FULL_STEM
+        AMOUNTS = FULL_AMOUNTS
     CONFIG_DIR.mkdir(parents=True, exist_ok=True); OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     tot = n = 0
     for task, _t, ng_t in TASKS:
