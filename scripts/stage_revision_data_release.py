@@ -186,6 +186,19 @@ RENORM_SUITES = {
     # baselines could not: that the methods stop separating on them.
     "dm1anti_pruning_p10_80":
         "task_preservation_tanh_h512_modcog_dm1anti_12k_seqbest_pruning_p10_80",
+    # The covariance estimator 2x2 -- window (end-step vs whole trial) x drive
+    # (task+noise vs noise-only). The original suite predates the probability
+    # fix and records clip throughout; cov2x2 re-ran the DRIVE axis under
+    # bisect but only at the end-step window, so the whole-trial cells had
+    # never been measured on the corrected rule. All four cells are here, so
+    # the 2x2 stays paired within trained network. Its two end-step cells
+    # reproduce cov2x2 exactly at the shared pruning seed.
+    #
+    # The clip-era suite is NOT deposited, following the same rule as the 3.8
+    # cap rows: pre-correction data stays off the deposit so it cannot be
+    # picked up by accident.
+    "windowdrive_h512_p10_80":
+        "task_preservation_tanh_h512_modcog_revised8_12k_seqbest_windowdrive_renorm_p10_80",
 }
 
 # The paper's statistics, which also changed -- from Wilcoxon/Holm to a
